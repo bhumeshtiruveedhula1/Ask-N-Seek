@@ -11,5 +11,7 @@ ultralytics>=8.2.0
 # Part 2 — Structured Store (Odysseus integration)
 # qdrant-client>=1.9.0
 
-# Part 3 — Query Parser
-# spacy>=3.7.0
+# Part 3 -- Query Parser
+spacy>=3.7.0
+# After install: python -m spacy download en_core_web_sm
+
