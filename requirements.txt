@@ -1,0 +1,11 @@
+# Part 1 — Extraction Engine dependencies
+opencv-python>=4.9.0
+scenedetect[opencv]>=0.6.3
+numpy>=1.24.0
+
+# Part 2 (future — listed here for environment planning)
+# ultralytics>=8.2.0
+# qdrant-client>=1.9.0
+
+# Part 3 (future)
+# spacy>=3.7.0
