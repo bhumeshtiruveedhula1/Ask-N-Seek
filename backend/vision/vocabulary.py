@@ -82,7 +82,7 @@ _RAW: list[str] = [
     "warehouse", "shed", "wall", "pillar", "column", "rooftop",
     "window", "balcony", "terrace", "porch", "garage", "carport",
     "driveway", "pathway", "alley", "corridor", "hallway", "lobby",
-    "entrance", "exit", "door", "curb", "manhole", "gutter", "drain", "pipe",
+    "entrance", "exit", "curb", "manhole", "gutter", "drain", "pipe",
     "chimney", "tower", "antenna", "mast", "pole", "billboard",
     "banner", "poster", "sign", "streetlight", "lamppost", "powerline",
     "tree", "bush", "shrub", "hedge", "grass", "lawn", "garden",
@@ -182,7 +182,7 @@ _RAW: list[str] = [
     "queue", "assembly",
     "graffiti", "vandalism", "debris", "wreckage", "rubble",
     "officer", "soldier", "firefighter", "guard", "nurse", "doctor",
-    "chef", "waiter", "cashier", "driver", "rider", "cyclist", "worker",
+    "chef", "waiter", "cashier", "driver", "rider", "cyclist",
     "jogger", "runner", "pedestrian", "tourist", "passenger",
     "prisoner", "suspect",
 
@@ -296,8 +296,6 @@ SYNONYM_MAP: dict[str, str] = {
     "spectacles":    "glasses",
     "shades":        "sunglasses",
     "earbuds":       "earphones",
-    # Lemma normalisation: spaCy lemmatizes 'glasses' -> 'glass'; map back to canonical
-    "glass":         "glasses",
 
     # Containers
     "garbage can":   "trashcan",

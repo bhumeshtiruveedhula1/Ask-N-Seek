@@ -1,11 +1,15 @@
-# Part 1 — Extraction Engine dependencies
+# Part 1 — Extraction Engine
 opencv-python>=4.9.0
-scenedetect[opencv]>=0.6.3
+scenedetect>=0.6.3
 numpy>=1.24.0
 
-# Part 2 (future — listed here for environment planning)
-# ultralytics>=8.2.0
+# Part 2 — Object Detection
+ultralytics>=8.2.0
+# torch + torchvision installed separately with CUDA:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Part 2 — Structured Store (Odysseus integration)
 # qdrant-client>=1.9.0
 
-# Part 3 (future)
+# Part 3 — Query Parser
 # spacy>=3.7.0
