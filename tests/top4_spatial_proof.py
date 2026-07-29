@@ -48,7 +48,7 @@ from backend.vision.spatial import compute_spatial_relations
 
 # All detections
 det_dicts = [{"class": d["class"], "bbox": d["bbox"],
-              "confidence": d["confidence"], "color": d["color"]}
+              "confidence": d["confidence"]}
              for d in detections]
 
 relations_top4 = compute_spatial_relations(det_dicts, top_k_pairs=4)

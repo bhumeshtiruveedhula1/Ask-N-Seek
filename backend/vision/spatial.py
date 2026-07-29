@@ -22,7 +22,7 @@ DetectionDict = TypedDict('DetectionDict', {
     'class':      str,
     'bbox':       tuple,    # x1, y1, x2, y2
     'confidence': float,
-    'color':      str,
+    # 'color' removed: color is Odysseus's Part 2 scope (contract reply 2026-07-29)
 })
 
 
