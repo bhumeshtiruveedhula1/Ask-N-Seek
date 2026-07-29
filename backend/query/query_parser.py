@@ -83,6 +83,14 @@ class ParseResult:
     unresolved_tokens: list[str]         = field(default_factory=list)
     warnings:          list[str]         = field(default_factory=list)
 
+    def to_response(self) -> dict:
+        """
+        Odysseus contract wrapper.
+        Returns {"status": "ok", "filters": <qdrant_filter_dict>}.
+        Does not modify qdrant_filter internals.
+        """
+        return {"status": "ok", "filters": self.qdrant_filter}
+
     def __repr__(self) -> str:
         return (
             f"ParseResult(\n"
