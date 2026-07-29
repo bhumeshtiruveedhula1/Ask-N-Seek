@@ -44,6 +44,7 @@ NEGATION_PHRASES: list[str] = [
     "missing",
     "lacking",
     "without",
+    "bina",
     "no",
     "not",
 ]
