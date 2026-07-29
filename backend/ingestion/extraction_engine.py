@@ -264,6 +264,7 @@ def extract_frames(
                 "timestamp"  : ts_s,
                 "scene_id"   : scene_id,
                 "frame_path" : frame_path,
+                "backend"    : "opencv_seek",  # Odysseus contract field
             }
 
             logger.debug(
