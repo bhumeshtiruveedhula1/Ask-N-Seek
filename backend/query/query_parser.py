@@ -128,6 +128,14 @@ def _levenshtein(a: str, b: str) -> int:
     return prev[lb]
 
 
+# Tokens that are counting quantifiers — must NEVER be matched as vocabulary
+# objects, even if they fuzzy-match a vocab term (e.g. 'couple' -> 'coupe').
+_COUNT_QUANTIFIER_STOPWORDS: frozenset[str] = frozenset({
+    "couple", "few", "several", "many", "some", "more", "less", "fewer",
+    "least", "most", "exactly", "only", "than",
+})
+
+
 def _fuzzy_match_vocab(token: str) -> str | None:
     """
     Exact + synonym + plural stemming + fuzzy vocabulary lookup.
@@ -142,16 +150,26 @@ def _fuzzy_match_vocab(token: str) -> str | None:
     if not token_l:
         return None
 
-    # 0. Skip pure color words -- they are attributes, not objects
+    # 0a. Skip pure color words -- they are attributes, not objects
     if resolve_color(token_l) is not None:
         return None
 
-    # 1. Direct vocabulary hit
+    # 0b. Skip count quantifier words -- they are never vocabulary objects
+    #     (e.g. 'couple' must not fuzzy-match 'coupe')
+    if token_l in _COUNT_QUANTIFIER_STOPWORDS:
+        return None
+
+    # 1. Synonym lookup FIRST — handles lemma normalisation (e.g. spaCy
+    #    lemmatizes 'glasses' -> 'glass'; synonym map sends 'glass' -> 'glasses')
+    resolved = resolve_synonym(token_l)
+    if resolved != token_l and resolved in VOCABULARY_SET:
+        return resolved
+
+    # 2. Direct vocabulary hit
     if token_l in VOCABULARY_SET:
         return token_l
 
-    # 2. Synonym lookup
-    resolved = resolve_synonym(token_l)
+    # 3. Synonym lookup for non-normalisation cases (token not in vocab)
     if resolved in VOCABULARY_SET:
         return resolved
 
