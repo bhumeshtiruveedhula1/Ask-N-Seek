@@ -86,10 +86,18 @@ class ParseResult:
     def to_response(self) -> dict:
         """
         Odysseus contract wrapper.
-        Returns {"status": "ok", "filters": <qdrant_filter_dict>}.
+        Returns {"status": "ok", "filters": <qdrant_filter_dict>,
+                 "unresolved_tokens": [...]}.
+        unresolved_tokens is [] on a fully-resolved query.
+        When non-empty with filters=={}, Odysseus's gateway should skip
+        the Qdrant call (empty filter would match everything).
         Does not modify qdrant_filter internals.
         """
-        return {"status": "ok", "filters": self.qdrant_filter}
+        return {
+            "status":            "ok",
+            "filters":           self.qdrant_filter,
+            "unresolved_tokens": self.unresolved_tokens,
+        }
 
     def __repr__(self) -> str:
         return (
