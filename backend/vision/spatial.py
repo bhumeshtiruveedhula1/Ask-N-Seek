@@ -18,11 +18,12 @@ from __future__ import annotations
 from typing import TypedDict
 
 
-class DetectionDict(TypedDict):
-    class_name: str
-    bbox: tuple[int, int, int, int]   # x1, y1, x2, y2
-    confidence: float
-    color: str
+DetectionDict = TypedDict('DetectionDict', {
+    'class':      str,
+    'bbox':       tuple,    # x1, y1, x2, y2
+    'confidence': float,
+    'color':      str,
+})
 
 
 class SpatialRelation(TypedDict):
@@ -86,10 +87,10 @@ def compute_spatial_relations(
 
             if cx_a < cx_b:
                 relations.append(SpatialRelation(
-                    subject=det_a["class_name"],
+                    subject=det_a['class'],
                     subject_idx=idx_a,
                     relation="left_of",
-                    object_=det_b["class_name"],
+                    object_=det_b['class'],
                     object_idx=idx_b,
                 ))
 

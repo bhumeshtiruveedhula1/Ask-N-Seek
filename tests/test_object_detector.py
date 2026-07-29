@@ -117,8 +117,8 @@ def test_spatial_relations() -> None:
     # Test case 1: Person left of car
     # person centroid_x = 100, car centroid_x = 400
     dets = [
-        {"class_name": "person",  "bbox": (50, 100, 150, 300),  "confidence": 0.92, "color": "blue"},
-        {"class_name": "car",     "bbox": (300, 150, 500, 350), "confidence": 0.88, "color": "red"},
+        {"class": "person",  "bbox": (50, 100, 150, 300),  "confidence": 0.92, "color": "blue"},
+        {"class": "car",     "bbox": (300, 150, 500, 350), "confidence": 0.88, "color": "red"},
     ]
     rels = compute_spatial_relations(dets, top_k_pairs=4)
 
@@ -132,8 +132,8 @@ def test_spatial_relations() -> None:
 
     # Test case 2: Inverted — car left of person
     dets2 = [
-        {"class_name": "person", "bbox": (300, 100, 450, 300), "confidence": 0.90, "color": "gray"},
-        {"class_name": "car",    "bbox": (50,  150, 200, 350), "confidence": 0.85, "color": "white"},
+        {"class": "person", "bbox": (300, 100, 450, 300), "confidence": 0.90, "color": "gray"},
+        {"class": "car",    "bbox": (50,  150, 200, 350), "confidence": 0.85, "color": "white"},
     ]
     rels2 = compute_spatial_relations(dets2, top_k_pairs=4)
     has_car_left = any(
@@ -146,7 +146,7 @@ def test_spatial_relations() -> None:
 
     # Test case 3: Multi-object — top-4 selection
     many_dets = [
-        {"class_name": f"obj{i}", "bbox": (i*100, 0, i*100+80, 100),
+        {"class": f"obj{i}", "bbox": (i*100, 0, i*100+80, 100),
          "confidence": 0.9 - i*0.05, "color": "gray"}
         for i in range(6)  # 6 objects, only top-4 should be paired
     ]
@@ -301,7 +301,7 @@ def test_real_detection() -> None:
         p(f"     Detections     : {len(detections)}")
 
         # Contract check: all required keys present
-        required_keys = {"class_name", "bbox", "confidence", "color", "spatial_relations"}
+        required_keys = {"class", "bbox", "confidence", "color", "spatial_relations"}
         if detections:
             keys_ok = all(required_keys.issubset(d.keys()) for d in detections)
             check(keys_ok,
@@ -345,7 +345,7 @@ def test_real_detection() -> None:
                     f"{r['relation']} {r['object_']}"
                     for r in det["spatial_relations"]
                 ) or "—"
-                p(f"     {det['class_name']:<25} {det['confidence']:>6.3f}  "
+                p(f"     {det['class']:<25} {det['confidence']:>6.3f}  "
                   f"{det['color']:<14}  {str(det['bbox']):<22}  {rels_str}")
 
         else:
