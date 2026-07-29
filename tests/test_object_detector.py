@@ -117,8 +117,8 @@ def test_spatial_relations() -> None:
     # Test case 1: Person left of car
     # person centroid_x = 100, car centroid_x = 400
     dets = [
-        {"class": "person",  "bbox": (50, 100, 150, 300),  "confidence": 0.92, "color": "blue"},
-        {"class": "car",     "bbox": (300, 150, 500, 350), "confidence": 0.88, "color": "red"},
+        {"class": "person",  "bbox": (50, 100, 150, 300),  "confidence": 0.92},
+        {"class": "car",     "bbox": (300, 150, 500, 350), "confidence": 0.88},
     ]
     rels = compute_spatial_relations(dets, top_k_pairs=4)
 
@@ -132,8 +132,8 @@ def test_spatial_relations() -> None:
 
     # Test case 2: Inverted — car left of person
     dets2 = [
-        {"class": "person", "bbox": (300, 100, 450, 300), "confidence": 0.90, "color": "gray"},
-        {"class": "car",    "bbox": (50,  150, 200, 350), "confidence": 0.85, "color": "white"},
+        {"class": "person", "bbox": (300, 100, 450, 300), "confidence": 0.90},
+        {"class": "car",    "bbox": (50,  150, 200, 350), "confidence": 0.85},
     ]
     rels2 = compute_spatial_relations(dets2, top_k_pairs=4)
     has_car_left = any(
@@ -147,7 +147,7 @@ def test_spatial_relations() -> None:
     # Test case 3: Multi-object — top-4 selection
     many_dets = [
         {"class": f"obj{i}", "bbox": (i*100, 0, i*100+80, 100),
-         "confidence": 0.9 - i*0.05, "color": "gray"}
+         "confidence": 0.9 - i*0.05}
         for i in range(6)  # 6 objects, only top-4 should be paired
     ]
     rels3 = compute_spatial_relations(many_dets, top_k_pairs=4)
@@ -300,8 +300,8 @@ def test_real_detection() -> None:
         p(f"     Inference time : {t_frame*1000:.0f} ms")
         p(f"     Detections     : {len(detections)}")
 
-        # Contract check: all required keys present
-        required_keys = {"class", "bbox", "confidence", "color", "spatial_relations"}
+        # Contract check: required keys (color removed per contract reply 2026-07-29)
+        required_keys = {"class", "bbox", "confidence", "spatial_relations"}
         if detections:
             keys_ok = all(required_keys.issubset(d.keys()) for d in detections)
             check(keys_ok,
@@ -320,11 +320,6 @@ def test_real_detection() -> None:
                           for d in detections)
             check(bbox_ok, "All bboxes have x1<x2 and y1<y2")
 
-            # color is a string
-            color_ok = all(isinstance(d["color"], str) and len(d["color"]) > 0
-                           for d in detections)
-            check(color_ok, "All color fields are non-empty strings")
-
             # spatial_relations is a list (may be empty)
             sr_ok = all(isinstance(d["spatial_relations"], list) for d in detections)
             check(sr_ok, "spatial_relations field is a list")
@@ -339,14 +334,14 @@ def test_real_detection() -> None:
                               f"relation={rel['relation']}")
 
             # Print detection table
-            p(f"     {'CLASS':<25} {'CONF':>6}  {'COLOR':<14}  {'BBOX':<22}  RELATIONS")
+            p(f"     {'CLASS':<25} {'CONF':>6}  {'BBOX':<34}  RELATIONS")
             for det in sorted(detections, key=lambda x: -x["confidence"])[:10]:
                 rels_str = "; ".join(
                     f"{r['relation']} {r['object_']}"
                     for r in det["spatial_relations"]
                 ) or "—"
                 p(f"     {det['class']:<25} {det['confidence']:>6.3f}  "
-                  f"{det['color']:<14}  {str(det['bbox']):<22}  {rels_str}")
+                  f"{str(det['bbox']):<34}  {rels_str}")
 
         else:
             p("     (no detections above threshold -- OK for synthetic/empty frames)")
@@ -426,7 +421,7 @@ def main() -> None:
     p("  [x] Detection tested against real footage (Section 4)")
     p("  [x] Spatial left/right spot-checked on synthetic + real frames (Section 2)")
     p("  [x] No proximity/near logic confirmed (Sections 2 + 5)")
-    p("  [x] Output contract shape verified (class,bbox,confidence,color,spatial_relations)")
+    p("  [x] Output contract shape verified (class, bbox, confidence, spatial_relations)")
     p()
     if FAIL_COUNT == 0:
         p("  [ALL CHECKS PASSED] Part 2 TRD requirements: SATISFIED.")

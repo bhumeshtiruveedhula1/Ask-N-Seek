@@ -31,9 +31,10 @@ from typing import TypedDict
 import cv2
 import numpy as np
 
-from .color_extractor import extract_color
 from .spatial import compute_spatial_relations, SpatialRelation
 from .vocabulary import VOCABULARY
+# color_extractor preserved but unhooked — see detect() comment below
+# from .color_extractor import extract_color
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +46,12 @@ logger = logging.getLogger(__name__)
 # and cannot be used as a bare identifier in class-syntax TypedDict.
 # The functional form supports it as a string key.
 DetectionResult = TypedDict('DetectionResult', {
-    'class':           str,                   # vocabulary class label (Odysseus contract)
-    'bbox':            tuple,                  # (x1, y1, x2, y2) pixels
-    'confidence':      float,                  # 0.0 - 1.0
-    'color':           str,                    # CIELAB palette name or "unknown"
-    'spatial_relations': list,                 # SpatialRelation items
+    'class':           str,   # vocabulary class label (Odysseus contract)
+    'bbox':            tuple, # (x1, y1, x2, y2) pixels
+    'confidence':      float, # 0.0 - 1.0
+    # 'color' field removed: color extraction is Odysseus's Part 2 scope
+    # (contract reply 2026-07-29) — color_extractor.py preserved but unhooked
+    'spatial_relations': list, # SpatialRelation items
 })
 
 
@@ -169,16 +171,15 @@ class ObjectDetector:
             # Map class index → vocabulary string
             class_name = self._model.names.get(cls, VOCABULARY[cls] if cls < len(VOCABULARY) else "unknown")
 
-            # Color from center-weighted crop
+            # color ownership confirmed as Odysseus's Part 2 scope (contract reply 2026-07-29)
+            # color_extractor.py preserved but unhooked from this pipeline
             bbox = (int(x1), int(y1), int(x2), int(y2))
-            color = extract_color(frame_bgr, bbox)
 
             raw_detections.append({
-                'class':           class_name,
-                'bbox':            bbox,
-                'confidence':      round(conf, 4),
-                'color':           color,
-                'spatial_relations': [],          # filled below
+                'class':             class_name,
+                'bbox':              bbox,
+                'confidence':        round(conf, 4),
+                'spatial_relations': [],        # filled below
             })
 
         # -- Compute spatial relations for this frame --------------------
@@ -186,8 +187,7 @@ class ObjectDetector:
         all_relations = compute_spatial_relations(
             [{'class': d['class'],
               'bbox': d['bbox'],
-              'confidence': d['confidence'],
-              'color': d['color']}
+              'confidence': d['confidence']}
              for d in raw_detections],
             top_k_pairs=4,
         )
