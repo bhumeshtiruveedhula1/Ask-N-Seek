@@ -336,6 +336,14 @@ def seed_stub_collection(client: QdrantClient, collection_name: str = STUB_COLLE
         vectors_config=VectorParams(size=1, distance=Distance.COSINE),
     )
 
+    # Payload indexes for fast keyword filtering (class, color, spatial)
+    for field in ("class_name", "color", "spatial_relations"):
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name=field,
+            field_schema="keyword",
+        )
+
     points: list[PointStruct] = []
     for video_id, frame_index, timestamp, scene_id, detections in _FRAME_SPECS:
         frame_path = f"frames/{video_id}/{frame_index:04d}.jpg"
