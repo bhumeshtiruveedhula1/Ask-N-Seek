@@ -1,17 +1,26 @@
-# Part 1 — Extraction Engine
-opencv-python>=4.9.0
+﻿# ============================================================
+# integration/part3 — Merged requirements (Achilles + Odysseus)
+# ============================================================
+
+# Part 1 — Extraction Engine (Achilles)
+opencv-python>=4.8.0
 scenedetect>=0.6.3
 numpy>=1.24.0
 
-# Part 2 — Object Detection
+# Part 2 — Object Detection (Achilles)
 ultralytics>=8.2.0
 # torch + torchvision installed separately with CUDA:
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
-# Part 2 — Structured Store (Odysseus integration)
-# qdrant-client>=1.9.0
-
-# Part 3 -- Query Parser
+# Part 3 — Query Parser (Achilles)
 spacy>=3.7.0
 # After install: python -m spacy download en_core_web_sm
 
+# Part 2+3 — Color + Storage + Interface (Odysseus)
+qdrant-client>=1.9.0
+Pillow>=10.0.0
+gradio>=4.0.0
+
+# Dev / test
+pytest>=8.0.0
+python-dotenv>=1.0.0
