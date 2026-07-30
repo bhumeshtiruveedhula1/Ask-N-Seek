@@ -51,6 +51,12 @@ JPEG_QUALITY: int = 90
 # PySceneDetect ContentDetector threshold (lower = more sensitive)
 SCENE_DETECT_THRESHOLD: float = 27.0
 
+# Duration cap: videos longer than this are processed only up to this point
+MAX_DURATION_S: float = 180.0
+
+# Resolution cap: frames taller than this are resized (aspect-ratio preserved)
+MAX_FRAME_HEIGHT: int = 720
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -85,6 +91,11 @@ def _seek_and_grab(video_path: str, timestamp_ms: float) -> np.ndarray | None:
 def _save_frame(frame: np.ndarray, frame_path: str) -> bool:
     """Write frame to disk immediately, drop the numpy array from caller's scope."""
     os.makedirs(os.path.dirname(frame_path), exist_ok=True)
+    # Resolution cap: resize to max 720p height (aspect-ratio preserved)
+    h, w = frame.shape[:2]
+    if h > MAX_FRAME_HEIGHT:
+        scale = MAX_FRAME_HEIGHT / h
+        frame = cv2.resize(frame, (int(w * scale), MAX_FRAME_HEIGHT), interpolation=cv2.INTER_AREA)
     ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
     if not ok:
         logger.error("imencode failed for %s", frame_path)
@@ -127,7 +138,7 @@ def _detect_scene_boundaries(video_path: str) -> list[tuple[float, float]]:
 
     Uses the open_video / SceneManager API (scenedetect ≥ 0.6).
     """
-    video = open_video(video_path)
+    video = open_video(video_path, framerate=None, downscale_factor=2)
     manager = SceneManager()
     manager.add_detector(ContentDetector(threshold=SCENE_DETECT_THRESHOLD))
     manager.detect_scenes(video=video, show_progress=False)
@@ -194,8 +205,27 @@ def extract_frames(
 
     logger.info("=== extract_frames START: %s (video_id=%s) ===", video_path, video_id)
 
+    # Duration cap: trim processing to MAX_DURATION_S if video is longer
+    duration_s = _get_video_duration_s(video_path)
+    if duration_s > MAX_DURATION_S:
+        logger.warning(
+            "Video %s is %.1f s — exceeds MAX_DURATION_S (%.0f s). "
+            "Processing only first %.0f s.",
+            video_id, duration_s, MAX_DURATION_S, MAX_DURATION_S,
+        )
+
     # --- Phase 1: detect scene boundaries (CPU only, no frame decoding into caller) ---
     scenes = _detect_scene_boundaries(video_path)  # [(start_s, end_s), ...]
+
+    # Apply duration cap: drop scenes that start at or after MAX_DURATION_S,
+    # trim the last scene's end if it crosses the cap.
+    if duration_s > MAX_DURATION_S:
+        capped: list[tuple[float, float]] = []
+        for s_start, s_end in scenes:
+            if s_start >= MAX_DURATION_S:
+                break
+            capped.append((s_start, min(s_end, MAX_DURATION_S)))
+        scenes = capped
 
     frame_index: int = 0            # global monotonic counter for this video
     seen_timestamps: set[float] = set()   # dedup guard
