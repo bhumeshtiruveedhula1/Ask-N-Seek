@@ -204,7 +204,7 @@ class TestPersonLeftOfCar:
                 has_rel = any(
                     (isinstance(rel, dict)
                      and rel.get("relation") == "left_of"
-                     and rel.get("target_class") == "car")
+                     and rel.get("object_") == "car")   # Achilles key: object_ not target_class
                     or (isinstance(rel, str) and rel == "left_of:car")
                     for rel in rels
                 )

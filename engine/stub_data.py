@@ -42,7 +42,7 @@ _NAMESPACE: uuid.UUID = uuid.UUID("b2c3d4e5-f6a7-8901-bcde-f12345678901")
 # Each entry: (video_id, frame_index, timestamp, scene_id, [detections])
 # Each detection: (class_name, color, confidence, bbox, spatial_relations)
 # bbox: normalised [x1, y1, x2, y2]
-# spatial_relations: list of {"relation": ..., "target_class": ...}
+# spatial_relations: list of {"relation": ..., "object_": ...}
 # ---------------------------------------------------------------------------
 
 _FRAME_SPECS: list[tuple] = [
@@ -63,7 +63,7 @@ _FRAME_SPECS: list[tuple] = [
     # Satisfies: "person in red", "person left of car", "person without helmet"
     ("vid1", 1, 3.5, 1, [
         ("person",  "red",   0.91, [0.10, 0.15, 0.35, 0.65],
-         [{"relation": "left_of", "target_class": "car"}]),
+         [{"relation": "left_of", "object_": "car"}]),
         ("car",     "white", 0.88, [0.45, 0.20, 0.95, 0.85], []),
     ]),
 
@@ -110,7 +110,7 @@ _FRAME_SPECS: list[tuple] = [
     # Satisfies: "person left of car", "person without helmet"
     ("vid1", 8, 21.0, 5, [
         ("person",  "black", 0.80, [0.05, 0.10, 0.30, 0.75],
-         [{"relation": "left_of", "target_class": "car"}]),
+         [{"relation": "left_of", "object_": "car"}]),
         ("car",     "white", 0.91, [0.38, 0.15, 0.95, 0.85], []),
         ("bicycle", "black", 0.64, [0.00, 0.50, 0.30, 0.90], []),
     ]),
@@ -157,7 +157,7 @@ _FRAME_SPECS: list[tuple] = [
     # Satisfies: "person left of car", "person without helmet"
     ("vid2", 4, 12.0, 3, [
         ("person",  "white", 0.83, [0.05, 0.10, 0.35, 0.75],
-         [{"relation": "left_of", "target_class": "car"}]),
+         [{"relation": "left_of", "object_": "car"}]),
         ("car",     "blue",  0.90, [0.40, 0.20, 0.95, 0.80], []),
     ]),
 
@@ -171,7 +171,7 @@ _FRAME_SPECS: list[tuple] = [
     # Satisfies: "person in red", "person left of car", "two people", "person without helmet"
     ("vid2", 6, 17.0, 4, [
         ("person",  "red",   0.85, [0.05, 0.10, 0.30, 0.75],
-         [{"relation": "left_of", "target_class": "car"}]),
+         [{"relation": "left_of", "object_": "car"}]),
         ("person",  "blue",  0.79, [0.35, 0.12, 0.58, 0.73], []),
         ("car",     "white", 0.93, [0.60, 0.15, 0.98, 0.85], []),
     ]),
@@ -211,7 +211,7 @@ _FRAME_SPECS: list[tuple] = [
     # Satisfies: "person in red" ×2, "person left of car", "two people", "person without helmet"
     ("vid3", 0, 1.5, 1, [
         ("person",  "red",   0.87, [0.05, 0.10, 0.30, 0.70],
-         [{"relation": "left_of", "target_class": "car"}]),
+         [{"relation": "left_of", "object_": "car"}]),
         ("person",  "red",   0.84, [0.35, 0.10, 0.60, 0.70], []),
         ("car",     "white", 0.90, [0.55, 0.20, 0.98, 0.85], []),
     ]),
@@ -226,7 +226,7 @@ _FRAME_SPECS: list[tuple] = [
     # Satisfies: "person left of car", "person without helmet"
     ("vid3", 2, 7.0, 2, [
         ("person",  "blue",  0.79, [0.10, 0.15, 0.35, 0.75],
-         [{"relation": "left_of", "target_class": "car"}]),
+         [{"relation": "left_of", "object_": "car"}]),
         ("car",     "black", 0.88, [0.40, 0.10, 0.95, 0.80], []),
     ]),
 
@@ -260,7 +260,7 @@ _FRAME_SPECS: list[tuple] = [
     # Satisfies: "person left of car", "person without helmet"
     ("vid3", 7, 23.0, 5, [
         ("person",  "white", 0.81, [0.05, 0.10, 0.32, 0.78],
-         [{"relation": "left_of", "target_class": "car"}]),
+         [{"relation": "left_of", "object_": "car"}]),
         ("car",     "red",   0.89, [0.38, 0.12, 0.92, 0.82], []),
         ("dog",     "brown", 0.67, [0.00, 0.55, 0.30, 0.90], []),
     ]),
