@@ -20,8 +20,10 @@ No video selected  : Bottom player shows placeholder message.
 from __future__ import annotations
 
 import json
+import queue
 import sys
 import os
+import threading
 
 # Make the project root importable when running from any CWD
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,6 +38,7 @@ from engine.stub_data import count_stub_rows
 from engine.paths import get_video_path, get_frame_path  # noqa: F401  (used in JS template injection + card TODO)
 from engine.search import search_structured, Result
 from engine.explanation import generate_explanation
+from engine.diagnosis import run_diagnosis
 
 # ---------------------------------------------------------------------------
 # Initialise Qdrant client (module-level singleton)
@@ -683,9 +686,24 @@ def process_query(query: str):
             "fail",
             f"🔴 Threshold check: FAIL — best score {best_score:.2f} &lt; threshold {threshold:.2f}",
         ))
+        yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+
+        # Run constraint-level diagnosis and replace static no-match panel
+        log.append(("muted", "🔬 Running no-match diagnosis…"))
+        yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+        try:
+            diag = run_diagnosis(
+                filter_dict.get("filters", {}),
+                _QDRANT_CLIENT,
+                _COLLECTION,
+            )
+            diag_html = diag["html"]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("diagnosis failed: %s", exc)
+            diag_html = _NO_MATCH_HTML   # fall back to static panel
         yield (
             _log_html(log),
-            _NO_MATCH_HTML,
+            diag_html,
             _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
         )
         return
@@ -796,13 +814,39 @@ def build_app() -> gr.Blocks:
         search_inputs  = [query_box]
         search_outputs = [log_output, results_output, video_output]
 
+        def _threaded_process_query(query: str):
+            """
+            Thread-safe wrapper: runs process_query() in a background thread,
+            streams updates via a queue so the Gradio event loop never blocks.
+            Sentinel None signals the generator to stop.
+            """
+            q: queue.Queue = queue.Queue()
+
+            def _worker():
+                try:
+                    for update in process_query(query):
+                        q.put(update)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("process_query thread error: %s", exc)
+                finally:
+                    q.put(None)  # sentinel
+
+            t = threading.Thread(target=_worker, daemon=True)
+            t.start()
+
+            while True:
+                item = q.get()
+                if item is None:
+                    break
+                yield item
+
         submit_btn.click(
-            fn=process_query,
+            fn=_threaded_process_query,
             inputs=search_inputs,
             outputs=search_outputs,
         )
         query_box.submit(
-            fn=process_query,
+            fn=_threaded_process_query,
             inputs=search_inputs,
             outputs=search_outputs,
         )
