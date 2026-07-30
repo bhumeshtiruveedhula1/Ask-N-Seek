@@ -1,0 +1,131 @@
+"""
+config.py — Odysseus Part 3 configuration.
+
+All sensitive values are loaded from environment variables or a .env file.
+No secrets are hardcoded.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Qdrant connection (for production — Part 2 real collection)
+# ---------------------------------------------------------------------------
+QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY: str | None = os.getenv("QDRANT_API_KEY", None)
+QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "video_objects")
+
+# Structured host/port (used by qdrant_gateway.py for direct connections)
+QDRANT_HOST: str = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT: int = int(os.getenv("QDRANT_PORT", "6333"))
+
+# ---------------------------------------------------------------------------
+# Stub collection name (in-memory, Milestone 1/2)
+# ---------------------------------------------------------------------------
+STUB_COLLECTION: str = "stub_video_objects"
+
+# ---------------------------------------------------------------------------
+# Data-source switch: True → in-memory stub, False → real Qdrant
+# TODO: SWAP FOR ACHILLES — set USE_STUB_QDRANT = False in .env when ready
+# ---------------------------------------------------------------------------
+USE_STUB_QDRANT: bool = os.getenv("USE_STUB_QDRANT", "true").lower() in {
+    "true", "1", "yes",
+}
+
+# ---------------------------------------------------------------------------
+# Parser configuration (for engine/parser_gateway.py)
+# WIRED: Achilles real parser (backend.query.query_parser.parse_query)
+# ---------------------------------------------------------------------------
+# integration/part3 fix (2026-07-30): default now points at Achilles's real parser.
+# Previously defaulted to engine.stub_parser (stub only recognised fixture vocab).
+# To revert to stub for isolated testing: set PARSER_MODULE=engine.stub_parser
+#   PARSER_FUNCTION=parse_query_stub in .env
+# NOTE: ParseResult (Achilles) is a dataclass — parser_gateway.py normalises it to
+#       the Odysseus stub dict shape {status, filters} before returning.
+PARSER_MODULE: str   = os.getenv("PARSER_MODULE",   "backend.query.query_parser")
+PARSER_FUNCTION: str = os.getenv("PARSER_FUNCTION", "parse_query")
+
+# ---------------------------------------------------------------------------
+# Field name mapping — change here if Qdrant schema or parser contract changes.
+# search.py reads field names exclusively from this dict.
+# ---------------------------------------------------------------------------
+FIELD_MAP: dict[str, str] = {
+    # Parser filter dict → key name used by Achilles's parse_query output
+    "filter_class":      "class",
+    # Qdrant payload → field names stored by Part 2
+    "qdrant_class":      "class_name",
+    "qdrant_color":      "color",
+    "qdrant_spatial":    "spatial_relations",
+    "qdrant_bbox":       "bbox",
+    "qdrant_confidence": "confidence",
+    "qdrant_video_id":   "video_id",
+    "qdrant_frame_idx":  "frame_index",
+    "qdrant_timestamp":  "timestamp",
+    "qdrant_scene_id":   "scene_id",
+    # Achilles SpatialRelation dict keys (from backend/vision/spatial.py)
+    # Each spatial_relations list item has exactly these keys:
+    "spatial_subject":     "subject",       # class_name of the left object
+    "spatial_subject_idx": "subject_idx",   # index in frame's detections list
+    "spatial_relation":    "relation",      # "left_of" | "right_of"
+    "spatial_object":      "object_",       # class_name of the right object
+    "spatial_object_idx":  "object_idx",    # index in frame's detections list
+}
+
+# ---------------------------------------------------------------------------
+# Threshold
+# ---------------------------------------------------------------------------
+# Milestone 1/2 placeholder: 0.5
+# Milestone 2: calibrate_threshold() will overwrite threshold_config.json
+PLACEHOLDER_THRESHOLD: float = 0.5
+THRESHOLD_CONFIG_PATH: Path = Path(__file__).parent / "threshold_config.json"
+
+
+def load_threshold() -> float:
+    """
+    Load the calibrated threshold from threshold_config.json.
+    Falls back to PLACEHOLDER_THRESHOLD (0.5) with a logged warning if missing.
+    """
+    if THRESHOLD_CONFIG_PATH.exists():
+        try:
+            with open(THRESHOLD_CONFIG_PATH, encoding="utf-8") as fh:
+                data = json.load(fh)
+            return float(data.get("threshold", PLACEHOLDER_THRESHOLD))
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            logger.warning("load_threshold: corrupt threshold_config.json (%s). Using default.", exc)
+    else:
+        logger.warning(
+            "load_threshold: threshold_config.json missing — using placeholder %.1f. "
+            "Run: python -m engine.calibration --data-source stub",
+            PLACEHOLDER_THRESHOLD,
+        )
+    return PLACEHOLDER_THRESHOLD
+
+
+# ---------------------------------------------------------------------------
+# Path templates (for engine/paths.py — change if deployment layout changes)
+# ---------------------------------------------------------------------------
+FRAME_PATH_TEMPLATE: str = os.getenv(
+    "FRAME_PATH_TEMPLATE",
+    "/mnt/agents/output/frames/{video_id}/{frame_index:04d}.jpg",
+)
+VIDEO_PATH_TEMPLATE: str = os.getenv(
+    "VIDEO_PATH_TEMPLATE",
+    "/mnt/agents/output/videos/{video_id}.mp4",
+)
+
+# ---------------------------------------------------------------------------
+# Gradio
+# ---------------------------------------------------------------------------
+GRADIO_PORT: int = int(os.getenv("GRADIO_PORT", "7860"))
+GRADIO_HOST: str = os.getenv("GRADIO_HOST", "0.0.0.0")
+
