@@ -136,6 +136,9 @@ def extract_color(
         if crop.size == 0:
             return "unknown"
 
+        # Downsample to 32x32 before k-means — eliminates large pixel arrays, ~100x faster
+        crop = cv2.resize(crop, (32, 32), interpolation=cv2.INTER_AREA)
+
         # Flatten to Nx3
         pixels = crop.reshape(-1, 3).astype(np.float32)
 
@@ -145,9 +148,9 @@ def extract_color(
         if k_actual < 1:
             return "unknown"
 
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 5, 1.0)
         _, labels, centers = cv2.kmeans(
-            pixels, k_actual, None, criteria, 3, cv2.KMEANS_PP_CENTERS
+            pixels, k_actual, None, criteria, 1, cv2.KMEANS_PP_CENTERS
         )
 
         # Find cluster with most pixels
