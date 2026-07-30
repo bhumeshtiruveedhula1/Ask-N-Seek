@@ -1,0 +1,27 @@
+{
+  "threshold": 0.3197,
+  "margin": 0.05,
+  "max_near_miss": 0.2697,
+  "near_miss_scores": {
+    "lorry": 0.2561,
+    "overpass": 0.2619,
+    "sketchpad": 0.2697,
+    "microscope": 0.2639,
+    "shoes": 0.2693
+  },
+  "valid_scores": {
+    "person": 0.4308,
+    "car": 0.6441,
+    "bus": 0.7047,
+    "office": 0.7192,
+    "suit": 0.7147,
+    "truck": 0.6002,
+    "notebook": 0.6676,
+    "woman": 0.5148,
+    "taxi": 0.5287,
+    "tree": 0.3263
+  },
+  "calibration_method": "near-miss: vocabulary classes present in exactly 1 video at low detection confidence (0.25-0.27). NOT a placeholder.",
+  "calibrated_at": "2026-07-30T12:14:14.932621+00:00",
+  "footage": "103 frames / 3 videos from ASK_N_SEEK/outputs/frames_real/"
+}
