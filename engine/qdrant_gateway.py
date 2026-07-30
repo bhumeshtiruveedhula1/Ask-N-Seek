@@ -52,3 +52,45 @@ def get_collection_name() -> str:
     if config.USE_STUB_QDRANT:
         return config.STUB_COLLECTION
     return config.QDRANT_COLLECTION
+
+
+def make_judge_collection_name() -> str:
+    """
+    Return a unique ephemeral collection name for a judge/evaluator session.
+
+    Format: judge_session_<uuid4>
+    Example: judge_session_3f2a1b4c-...
+
+    Each call returns a new UUID — callers are responsible for creating the
+    collection and passing the name to seed_stub_collection() / upsert().
+    """
+    import uuid
+    return f"{config.JUDGE_SESSION_PREFIX}{uuid.uuid4()}"
+
+
+def drop_old_judge_sessions(client) -> list[str]:
+    """
+    Drop ALL judge_session_* collections from the given Qdrant client.
+
+    Call this once on app startup to clean up sessions from previous runs.
+    Qdrant in-memory has no per-collection created_at metadata, so we drop
+    all judge sessions unconditionally (acceptable for demo/eval use).
+
+    Returns
+    -------
+    list[str]
+        Names of collections that were dropped.
+    """
+    existing = [c.name for c in client.get_collections().collections]
+    dropped  = []
+    for name in existing:
+        if name.startswith(config.JUDGE_SESSION_PREFIX):
+            try:
+                client.delete_collection(name)
+                dropped.append(name)
+                logger.info("qdrant_gateway: dropped judge session collection %r", name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("qdrant_gateway: failed to drop %r — %s", name, exc)
+    if not dropped:
+        logger.debug("qdrant_gateway: no judge session collections to drop.")
+    return dropped

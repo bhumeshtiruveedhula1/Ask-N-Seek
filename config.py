@@ -35,6 +35,12 @@ QDRANT_PORT: int = int(os.getenv("QDRANT_PORT", "6333"))
 STUB_COLLECTION: str = "stub_video_objects"
 
 # ---------------------------------------------------------------------------
+# Judge session collections (ephemeral, per-evaluator isolation)
+# ---------------------------------------------------------------------------
+JUDGE_SESSION_PREFIX: str    = "judge_session_"
+MAX_SESSION_AGE_MINUTES: int = 30
+
+# ---------------------------------------------------------------------------
 # Data-source switch: True → in-memory stub, False → real Qdrant
 # TODO: SWAP FOR ACHILLES — set USE_STUB_QDRANT = False in .env when ready
 # ---------------------------------------------------------------------------
