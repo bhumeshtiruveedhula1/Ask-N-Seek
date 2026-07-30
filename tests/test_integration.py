@@ -60,32 +60,28 @@ class TestParserGateway:
     def test_filters_has_all_required_keys(self):
         result = parse_query(self.KNOWN_QUERY)
         filters = result["filters"]
-        # Real parser_gateway returns Qdrant filter shape: {must: [...], must_not: [...], ...}
-        # At minimum a match query must have a 'must' list with at least one clause.
-        assert "must" in filters, (
-            f"Real parser output must contain 'must' key. Got: {list(filters.keys())}"
+        # parser_gateway now emits stub-flat shape (matches search_structured's input contract).
+        required = {"class", "color", "negated", "spatial_relation", "count_constraint"}
+        assert required.issubset(filters.keys()), (
+            f"Stub-flat filters must have all required keys. Got: {list(filters.keys())}"
         )
-        assert isinstance(filters["must"], list), "filters['must'] must be a list"
-        assert len(filters["must"]) > 0, "filters['must'] must have at least one clause"
 
     def test_negated_is_list(self):
-        # Real parser returns must_not as a list when negation is present.
-        # For KNOWN_QUERY (non-negated), must_not may be absent — that is correct.
+        # stub-flat shape: filters['negated'] is always a list (empty for non-negated queries).
         result = parse_query(self.KNOWN_QUERY)
-        must_not = result["filters"].get("must_not", [])
-        assert isinstance(must_not, list), (
-            f"filters['must_not'] must be a list when present, got: {type(must_not)}"
+        negated = result["filters"].get("negated", [])
+        assert isinstance(negated, list), (
+            f"filters['negated'] must be a list, got: {type(negated)}"
         )
 
     def test_known_query_person_in_red(self):
-        # Real parser extracts 'person' as class filter.
-        # 'in red' is not bound as a color attribute by the current parser (parser limitation).
-        # Test asserts: status=match and person class is present in filters.
+        # parser_gateway emits stub-flat: filters['class'] = 'person'.
+        # 'in red' is not bound as a color attribute by the current parser (known limitation).
         result = parse_query("person in red")
         assert result["status"] == "match"
-        must = result["filters"]["must"]
-        class_values = [c["match"]["value"] for c in must if c["key"] == "detections[].class_name"]
-        assert "person" in class_values, f"Expected 'person' in class filter, got: {class_values}"
+        assert result["filters"]["class"] == "person", (
+            f"Expected filters['class']='person', got: {result['filters'].get('class')}"
+        )
 
     def test_nonsense_returns_no_match(self):
         # "purple elephant dancing" — 'elephant' IS in vocabulary, so the real parser

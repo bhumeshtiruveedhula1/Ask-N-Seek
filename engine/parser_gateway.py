@@ -59,35 +59,86 @@ logger = logging.getLogger(__name__)
 
 def _normalise_parse_result(result) -> dict:
     """
-    Convert Achilles's ParseResult dataclass to the Odysseus stub dict shape.
+    Convert Achilles's ParseResult dataclass → stub-flat dict shape.
 
-    BRANCH A: qdrant_filter empty + unresolved_tokens non-empty
-              → {"status": "no_match", "filters": {}}
-    BRANCH B: qdrant_filter non-empty (unresolved_tokens may still be present)
-              → {"status": "match", "filters": <qdrant_filter>}
+    Output contract (matches search_structured's expected input):
+        {
+            "status":  "match" | "no_match",
+            "filters": {
+                "class":            str | None,      # primary positive class
+                "color":            str | None,      # primary color attribute
+                "negated":          list[str],        # classes that must NOT appear
+                "spatial_relation": dict | None,      # {type, target_class}
+                "count_constraint": dict | None,      # {class, op, value}
+            }
+        }
+
+    Branch A: no objects resolved + unresolved_tokens non-empty → no_match
+    Branch B: at least one object resolved → match, extract fields
+    Branch C: plain dict (stub parser) → pass through unchanged
     """
-    # Handle plain dict (stub parser or already-normalised result)
+    # Branch C: stub parser already returns plain dict — pass through unchanged
     if isinstance(result, dict):
         return result
 
     # Achilles ParseResult dataclass — extract via attribute access
-    qdrant_filter = getattr(result, "qdrant_filter", {}) or {}
-    unresolved    = getattr(result, "unresolved_tokens", []) or []
+    objects    = getattr(result, "objects",           []) or []
+    spatial    = getattr(result, "spatial",           []) or []
+    unresolved = getattr(result, "unresolved_tokens", []) or []
 
-    # BRANCH A: no usable filter, content words unresolved → short-circuit
-    if not qdrant_filter and unresolved:
+    # Branch A: nothing was resolved → no_match
+    if not objects and unresolved:
         logger.debug(
-            "parser_gateway: BRANCH A — empty filter + unresolved=%s → no_match",
+            "parser_gateway: BRANCH A — no objects, unresolved=%s → no_match",
             unresolved,
         )
         return {"status": "no_match", "filters": {}}
 
-    # BRANCH B: at least one filter constraint present → proceed to Qdrant
+    # Branch B: build stub-flat filters from ParseResult fields
+    # Primary object: first non-negated object spec
+    positive = [o for o in objects if not o.get("negated")]
+    primary  = positive[0] if positive else (objects[0] if objects else {})
+
+    class_filter = primary.get("class_name")  or None
+    color_filter = primary.get("color")        or None
+
+    # Negated classes: all objects where negated=True
+    negated_classes = [
+        o["class_name"] for o in objects
+        if o.get("negated") and o.get("class_name")
+    ]
+
+    # Spatial relation: first spatial spec if present
+    spatial_relation = None
+    if spatial:
+        sp = spatial[0]
+        spatial_relation = {
+            "type":         sp.get("relation"),
+            "target_class": sp.get("object_"),
+        }
+
+    # Count constraint: primary object's count fields if present
+    count_constraint = None
+    if primary.get("count_op") is not None:
+        count_constraint = {
+            "class": primary.get("class_name"),
+            "op":    primary["count_op"],
+            "value": primary.get("count_val"),
+        }
+
+    filters = {
+        "class":            class_filter,
+        "color":            color_filter,
+        "negated":          negated_classes,
+        "spatial_relation": spatial_relation,
+        "count_constraint": count_constraint,
+    }
+
     logger.debug(
-        "parser_gateway: BRANCH B — filter=%s  unresolved=%s → match",
-        list(qdrant_filter.keys()), unresolved,
+        "parser_gateway: BRANCH B — class=%s color=%s negated=%s spatial=%s count=%s",
+        class_filter, color_filter, negated_classes, spatial_relation, count_constraint,
     )
-    return {"status": "match", "filters": qdrant_filter}
+    return {"status": "match", "filters": filters}
 
 
 def parse_query(query: str) -> dict:
