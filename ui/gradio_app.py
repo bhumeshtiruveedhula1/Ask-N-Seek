@@ -39,6 +39,7 @@ from engine.paths import get_video_path, get_frame_path  # noqa: F401  (used in 
 from engine.search import search_structured, Result
 from engine.explanation import generate_explanation
 from engine.diagnosis import run_diagnosis
+from engine.live_ingestor import LiveIngestor
 
 # ---------------------------------------------------------------------------
 # Initialise Qdrant client (module-level singleton)
@@ -742,6 +743,45 @@ def build_app() -> gr.Blocks:
         </div>
         """)
 
+        # ── Judge session state ──────────────────────────────────────────────
+        # Stores the active judge collection name so queries target it.
+        # None = fall back to default stub/real collection.
+        judge_collection = gr.State(value=None)
+
+        # ── Ingestion panel ──────────────────────────────────────────────────
+        with gr.Accordion("📥 Live Judge-Video Ingestion", open=True):
+            gr.HTML('<div class="panel-label">Drop a video to index it for querying</div>')
+            with gr.Row():
+                upload_video = gr.File(
+                    label="Drop a video file (.mp4 / .avi / .mov)",
+                    file_types=[".mp4", ".avi", ".mov", ".mkv"],
+                    elem_id="upload-video",
+                    scale=2,
+                )
+                with gr.Column(scale=3):
+                    ingest_progress = gr.Slider(
+                        minimum=0, maximum=100, value=0,
+                        label="Ingestion Progress",
+                        interactive=False,
+                        elem_id="ingest-progress",
+                    )
+                    ingest_log = gr.Textbox(
+                        label="Ingestion Log",
+                        lines=6,
+                        interactive=False,
+                        elem_id="ingest-log",
+                    )
+                    ingest_stats = gr.JSON(
+                        label="Stats",
+                        elem_id="ingest-stats",
+                    )
+
+        gr.HTML('<hr style="border-color:#1e293b;margin:8px 0;">')
+
+        # ── Query section (shown after ingestion completes) ──────────────────
+        with gr.Column(visible=True, elem_id="query-section") as query_section:
+            gr.HTML('<div class="panel-label">Search</div>')
+
         # ── Query row ────────────────────────────────────────────────────────
         with gr.Row(elem_classes=["query-row"]):
             query_box = gr.Textbox(
@@ -849,6 +889,54 @@ def build_app() -> gr.Blocks:
             fn=_threaded_process_query,
             inputs=search_inputs,
             outputs=search_outputs,
+        )
+
+        # ── Ingestion event: auto-trigger on file drop ───────────────────
+        def _start_ingestion(file_obj, current_collection):
+            """
+            Background-thread ingestion using same queue pattern as
+            _threaded_process_query.  Yields (log, progress, stats, collection)
+            tuples.  On completion, returns the new judge collection name
+            so future queries target it.
+            """
+            if file_obj is None:
+                yield "", 0, None, current_collection
+                return
+
+            video_path = file_obj.name if hasattr(file_obj, "name") else str(file_obj)
+            ingestor   = LiveIngestor(_QDRANT_CLIENT)
+            iq: queue.Queue = queue.Queue()
+            log_lines: list[str] = []
+
+            def _worker():
+                try:
+                    for upd in ingestor.ingest(video_path):
+                        iq.put(upd)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("ingestion thread error: %s", exc)
+                finally:
+                    iq.put(None)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+            new_collection = current_collection
+            while True:
+                upd = iq.get()
+                if upd is None:
+                    break
+                phase   = upd.get("phase", "")
+                pct     = upd.get("progress_pct", 0)
+                msg     = upd.get("message", "")
+                stats   = upd.get("stats", {})
+                log_lines.append(f"[{phase}] {msg}")
+                if phase == "complete":
+                    new_collection = stats.get("collection", new_collection)
+                yield "\n".join(log_lines[-20:]), pct, stats, new_collection
+
+        upload_video.change(
+            fn=_start_ingestion,
+            inputs=[upload_video, judge_collection],
+            outputs=[ingest_log, ingest_progress, ingest_stats, judge_collection],
         )
 
     return demo
