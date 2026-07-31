@@ -347,6 +347,31 @@ def _extract_objects_spacy(query: str) -> list[ObjectSpec]:
                 bound_color = c
                 break
 
+        # (a2) prep→pobj color binding: "person in red" / "car in dark blue"
+        #      spaCy parse: person(ROOT)→in(prep)→red(pobj)
+        if bound_color is None:
+            for prep_child in token.children:
+                if prep_child.dep_ != "prep":
+                    continue
+                for pobj in prep_child.children:
+                    if pobj.dep_ != "pobj":
+                        continue
+                    # Try bigram: amod child of pobj + pobj (e.g. "dark" + "blue")
+                    amod_of_pobj = [c for c in pobj.children if c.dep_ == "amod"]
+                    if amod_of_pobj:
+                        bigram = [amod_of_pobj[0].text.lower(), pobj.text.lower()]
+                        c, _ = _resolve_color_bigram(bigram)
+                        if c:
+                            bound_color = c
+                            break
+                    # Single-word pobj color
+                    c = resolve_color(pobj.text.lower())
+                    if c:
+                        bound_color = c
+                        break
+                if bound_color:
+                    break
+
         # (b) Token is itself modified by a color in a prepositional / appositive chain
         if bound_color is None:
             # Look for amod on the same head
