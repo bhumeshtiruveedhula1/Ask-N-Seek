@@ -10,3 +10,12 @@ build/
 threshold_config.json
 *.mp4
 frames/
+
+# Auto-added
+outputs/
+weights/
+*.pt
+patch_yields.py
+verify_seek.py
+phase3_checks.py
+edge_case_validator_kimi.py

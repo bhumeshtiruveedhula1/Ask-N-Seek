@@ -801,7 +801,7 @@ def process_query(
         yield (
             _log_html([("muted", "⌛ Waiting for a query…")]),
             _NO_RESULTS_HTML,
-            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            None,
             "",
             render_history_html(history_list),
             history_list,
@@ -817,7 +817,7 @@ def process_query(
     yield (
         _log_html(log),
         _LOADING_HTML,
-        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        None,
         banner_html,
         render_history_html(history_list),
         history_list,
@@ -830,7 +830,7 @@ def process_query(
     yield (
         _log_html(log),
         _LOADING_HTML,
-        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        None,
         banner_html,
         render_history_html(history_list),
         history_list,
@@ -854,7 +854,7 @@ def process_query(
         yield (
             _log_html(log),
             _NO_MATCH_HTML,
-            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            None,
             banner_html,
             render_history_html(history_list),
             history_list,
@@ -866,7 +866,7 @@ def process_query(
     yield (
         _log_html(log),
         _LOADING_HTML,
-        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        None,
         banner_html,
         render_history_html(history_list),
         history_list,
@@ -879,7 +879,7 @@ def process_query(
     yield (
         _log_html(log),
         _LOADING_HTML,
-        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        None,
         banner_html,
         render_history_html(history_list),
         history_list,
@@ -891,7 +891,7 @@ def process_query(
     yield (
         _log_html(log),
         _LOADING_HTML,
-        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        None,
         banner_html,
         render_history_html(history_list),
         history_list,
@@ -903,7 +903,7 @@ def process_query(
     yield (
         _log_html(log),
         _LOADING_HTML,
-        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        None,
         banner_html,
         render_history_html(history_list),
         history_list,
@@ -921,7 +921,7 @@ def process_query(
         yield (
             _log_html(log),
             _LOADING_HTML,
-            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            None,
             banner_html,
             render_history_html(history_list),
             history_list,
@@ -932,7 +932,7 @@ def process_query(
         yield (
             _log_html(log),
             _LOADING_HTML,
-            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            None,
             banner_html,
             render_history_html(history_list),
             history_list,
@@ -960,7 +960,7 @@ def process_query(
         yield (
             _log_html(log),
             diag_html,
-            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            None,
             banner_html,
             render_history_html(history_list),
             history_list,
@@ -974,7 +974,7 @@ def process_query(
     yield (
         _log_html(log),
         _LOADING_HTML,
-        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        None,
         banner_html,
         render_history_html(history_list),
         history_list,
@@ -1007,7 +1007,7 @@ def process_query(
     yield (
         _log_html(log),
         results_html,
-        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        None,
         banner_html,
         render_history_html(history_list),
         history_list,
@@ -1197,10 +1197,13 @@ def build_app() -> gr.Blocks:
                     elem_id="result-picker",
                 )
 
-        # ── Video player ─────────────────────────────────────────────────────
+        # ── Video player (native gr.Video — no HTML/script hacks) ──────────
         gr.HTML('<div class="panel-label" style="margin-top:16px;">Video Player</div>')
-        video_output = gr.HTML(
-            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        video_output = gr.Video(
+            label="Selected Clip",
+            value=None,
+            autoplay=False,
+            interactive=False,
             elem_id="video-panel",
         )
 
@@ -1294,14 +1297,14 @@ def build_app() -> gr.Blocks:
         )
 
         # ── Result picker: native Gradio seek (no JS/Shadow DOM) ─────────────
-        def _on_result_picked(encoded_value: str) -> str:
+        def _on_result_picked(encoded_value: str):
             """
             Decode 'video_path:::timestamp' from dropdown selection.
-            Return updated video player HTML with the video seeking to timestamp.
-            This is a native Gradio event — no JavaScript required.
+            Returns gr.update() for native gr.Video component.
+            Zero HTML, zero JavaScript, zero script tags.
             """
             if not encoded_value or ":::" not in encoded_value:
-                return _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+                return gr.update(value=None)
             parts = encoded_value.split(":::", 1)
             vpath = parts[0].strip()
             try:
@@ -1309,29 +1312,9 @@ def build_app() -> gr.Blocks:
             except (ValueError, IndexError):
                 ts = 0.0
             if not vpath or vpath == "None":
-                return _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
-            # Gradio serves uploaded files at /file=<absolute_path>
-            video_url = f"/file={vpath}"
-            inner_html = f"""
-                <div class="video-info-bar">
-                    <span class="vid-badge">&#x1F4F9; Video</span>
-                    <span class="time-badge">&#x23F1; {ts:.1f}s</span>
-                </div>
-                <video id="main-player" controls
-                       style="width:100%;border-radius:8px;background:#000;">
-                    <source src="{video_url}" type="video/mp4">
-                </video>
-                <script>
-                (function(){{
-                    var v = document.getElementById('main-player');
-                    if (!v) return;
-                    function seek(){{ v.currentTime = {ts}; }}
-                    v.addEventListener('loadedmetadata', seek);
-                    setTimeout(function(){{ if (v.readyState >= 1) seek(); }}, 300);
-                }})();
-                </script>
-            """
-            return _VIDEO_PLAYER_WRAP.format(inner=inner_html)
+                return gr.update(value=None)
+            # gr.Video with playback_position seeks to timestamp natively
+            return gr.update(value=vpath, playback_position=ts)
 
         result_picker.change(
             fn=_on_result_picked,
