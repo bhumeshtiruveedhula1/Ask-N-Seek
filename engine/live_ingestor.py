@@ -163,7 +163,10 @@ class LiveIngestor:
             }
 
             if frame_count % 5 == 0:
-                pct = _clamp(10 + int(frame_count / max(frame_count, 1) * 50), 10, 60)
+                # Asymptotic progress: each batch of 5 frames adds ~2%, capped at 59
+                # so the bar visibly moves without knowing total frame count up front.
+                # Formula: pct grows from 10 toward 59; step = 2 per 5-frame batch.
+                pct = _clamp(10 + (frame_count // 5) * 2, 10, 59)
                 yield _progress(
                     "detection", pct,
                     f"Frame {frame_count}: {obj_count} objects so far", stats,

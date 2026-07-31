@@ -425,30 +425,40 @@ function _updateVideoPlayer(videoId, timestamp) {
     const container = document.getElementById('video-player-inner');
     if (!container) return;
 
-    // Resolve video URL from Python-injected path template
-    // TODO: SWAP FOR ACHILLES'S REAL IMPLEMENTATION
-    // Set VIDEO_PATH_TEMPLATE in config.py (or .env) to point to real video files.
-    const rawTpl  = window._ODYSSEUS_VIDEO_TPL || '/mnt/agents/output/videos/{video_id}.mp4';
-    const videoUrl = rawTpl.replace('{video_id}', videoId);
+    // FIX 2: Read the actual uploaded video path from hidden Gradio textbox.
+    // Gradio serves temp uploads at /file=<absolute_path>.
+    const pathEl = document.querySelector('#current-video-path textarea') ||
+                   document.querySelector('#current-video-path input');
+    const uploadedPath = pathEl ? pathEl.value.trim() : '';
+
+    let videoUrl;
+    if (uploadedPath) {
+        videoUrl = '/file=' + encodeURIComponent(uploadedPath);
+    } else {
+        // Fallback to template (pre-indexed video served from known path)
+        const rawTpl = window._ODYSSEUS_VIDEO_TPL || '';
+        videoUrl = rawTpl ? rawTpl.replace('{video_id}', videoId) : '';
+    }
+
+    if (!videoUrl) {
+        container.innerHTML = '<p style="color:#475569;text-align:center;padding:32px 0;">🎬 No video loaded — drop a video file to begin.</p>';
+        return;
+    }
 
     container.innerHTML = `
         <div class="video-info-bar">
             <span class="vid-badge">📹 ${videoId}</span>
-            <span class="time-badge">⏱ Seeking to ${timestamp.toFixed(1)}s</span>
+            <span class="time-badge">⏱ ${timestamp.toFixed(1)}s</span>
         </div>
-        <video id="main-player" controls>
+        <video id="main-player" controls style="width:100%;border-radius:8px;background:#000;">
             <source src="${videoUrl}" type="video/mp4">
-            <p style="color:#475569;text-align:center;padding:32px 0;font-size:0.88rem;">
-                🎬 Stub mode — real footage will appear here after Part 1 integration.<br>
-                <span style="font-size:0.75rem;color:#374151;">Video: <b>${videoId}</b> &nbsp;|&nbsp; Timestamp: <b>${timestamp.toFixed(2)}s</b></span>
-            </p>
         </video>
     `;
     const vid = document.getElementById('main-player');
     if (vid) {
         vid.addEventListener('loadedmetadata', () => { vid.currentTime = timestamp; });
-        // Fallback for if metadata already loaded (src already cached)
-        if (!isNaN(vid.duration)) { vid.currentTime = timestamp; }
+        // Fallback for cached metadata
+        setTimeout(() => { if (!isNaN(vid.duration)) vid.currentTime = timestamp; }, 150);
     }
 }
 
@@ -459,6 +469,21 @@ function _notifyGradio(elemId, value) {
     setter.call(el, value);
     el.dispatchEvent(new Event('input', { bubbles: true }));
 }
+
+// FIX 3: Auto-focus query box when ingestion log contains __FOCUS_QUERY__ marker.
+setInterval(function() {
+    const logEl = document.querySelector('#ingest-log textarea') ||
+                  document.querySelector('#ingest-log input');
+    if (logEl && logEl.value && logEl.value.includes('__FOCUS_QUERY__')) {
+        const inputEl = document.querySelector('#query-input textarea') ||
+                        document.querySelector('#query-input input');
+        if (inputEl) {
+            inputEl.focus();
+            // Clear the marker so we don't refocus on every interval tick
+            logEl.value = logEl.value.replace('__FOCUS_QUERY__', '');
+        }
+    }
+}, 500);
 
 // Run setup once DOM is ready
 if (document.readyState === 'loading') {
@@ -1082,6 +1107,14 @@ def build_app() -> gr.Blocks:
             label="",
         )
 
+        # Hidden textbox: stores uploaded video path for JS video player (Fix 2)
+        current_video_path = gr.Textbox(
+            visible=False,
+            elem_id="current-video-path",
+            label="",
+            value="",
+        )
+
         # ── Quick-test buttons ────────────────────────────────────────────────
         with gr.Accordion("📋 Verification Queries (Milestone 1 Checklist)", open=False):
             gr.Markdown(
@@ -1191,12 +1224,13 @@ def build_app() -> gr.Blocks:
                 log_lines.append(f"[{phase}] {msg}")
                 if phase == "complete":
                     new_collection = stats.get("collection", new_collection)
-                yield "\n".join(log_lines[-20:]), pct, stats, new_collection
+                    log_lines.append("__FOCUS_QUERY__")  # Fix 3: triggers JS auto-focus
+                yield "\n".join(log_lines[-20:]), pct, stats, new_collection, video_path
 
         upload_video.change(
             fn=_start_ingestion,
             inputs=[upload_video, judge_collection],
-            outputs=[ingest_log, ingest_progress, ingest_stats, judge_collection],
+            outputs=[ingest_log, ingest_progress, ingest_stats, judge_collection, current_video_path],
         )
 
     return demo
