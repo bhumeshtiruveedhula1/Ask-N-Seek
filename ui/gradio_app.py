@@ -38,7 +38,9 @@ from engine.stub_data import count_stub_rows
 from engine.paths import get_video_path, get_frame_path  # noqa: F401  (used in JS template injection + card TODO)
 from engine.search import search_structured, Result
 from engine.explanation import generate_explanation
-from engine.diagnosis import run_diagnosis
+from engine.diagnosis import run_diagnosis, diagnose_no_match, render_diagnosis_html
+from engine.live_ingestor import LiveIngestor, IngestConfig
+from engine.parse_lens import extract_parse_tree, render_tree_html
 
 # ---------------------------------------------------------------------------
 # Initialise Qdrant client (module-level singleton)
@@ -48,6 +50,11 @@ from engine.diagnosis import run_diagnosis
 _QDRANT_CLIENT  = get_qdrant_client()
 _COLLECTION     = get_collection_name()
 _STUB_ROW_COUNT = count_stub_rows()
+
+# ---------------------------------------------------------------------------
+# Live Ingestor singleton (lazy-loads YOLO on first use)
+# ---------------------------------------------------------------------------
+_LIVE_INGESTOR = LiveIngestor()
 
 # ---------------------------------------------------------------------------
 # CSS
@@ -358,7 +365,90 @@ button.primary:hover {
     transform: translateY(-1px) !important;
     box-shadow: 0 6px 20px rgba(99,102,241,0.45) !important;
 }
+
+/* ── Live Ingest tab ──────────────────────────────────────────────────────── */
+.ingest-upload {
+    border: 2px dashed #1e1e3f !important;
+    border-radius: 12px !important;
+    background: #090915 !important;
+    transition: border-color 0.2s !important;
+}
+.ingest-upload:hover {
+    border-color: #6366f1 !important;
+}
+.ingest-log {
+    background: #060610;
+    border: 1px solid #1a1a2e;
+    border-radius: 10px;
+    padding: 14px 16px;
+    height: 340px;
+    overflow-y: auto;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 0.80rem;
+    line-height: 1.8;
+    color: #94a3b8;
+    white-space: pre-wrap;
+    scroll-behavior: smooth;
+}
+.ingest-log::-webkit-scrollbar { width: 4px; }
+.ingest-log::-webkit-scrollbar-thumb { background: #2d2d50; border-radius: 2px; }
+.status-idle    { color: #475569; font-size: 0.9rem; }
+.status-running { color: #818cf8; font-size: 0.9rem; font-weight: 600; }
+.status-done    { color: #10b981; font-size: 0.9rem; font-weight: 600; }
+.status-error   { color: #ef4444; font-size: 0.9rem; font-weight: 600; }
+.query-reveal { 
+    border-top: 1px solid #1e1e3f;
+    padding-top: 18px;
+    margin-top: 8px;
+}
+.ingest-btn {
+    background: linear-gradient(135deg, #10b981, #059669) !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    transition: all 0.18s !important;
+    box-shadow: 0 4px 15px rgba(16,185,129,0.3) !important;
+}
+.ingest-btn:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 20px rgba(16,185,129,0.45) !important;
+}
+
+/* ── Parse Lens ─────────────────────────────────────────────────────────── */
+.parse-lens {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 0.82rem;
+    border: 1px solid #1e1e3f;
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: #0d0d20;
+    color: #e2e8f0;
+    margin-top: 6px;
+    margin-bottom: 12px;
+}
+.parse-node-amod { border-left: 3px solid #3b82f6; padding-left: 8px; margin: 2px 0; }
+.parse-node-compound { border-left: 3px solid #22c55e; padding-left: 8px; margin: 2px 0; }
+.parse-node-neg { border-left: 3px solid #ef4444; padding-left: 8px; margin: 2px 0; }
+.parse-node-spatial { background: rgba(168,85,247,0.15); border-left: 3px solid #a855f7; padding: 2px 6px; border-radius: 4px; }
+.parse-entity { font-weight: bold; color: #38bdf8; }
+.parse-color { font-style: italic; color: #c084fc; }
 """
+
+
+# ---------------------------------------------------------------------------
+# Parse Lens Updater
+# ---------------------------------------------------------------------------
+
+def update_parse_lens(query_text: str) -> str:
+    """Real-time Gradio callback to render dependency parse tree as user types."""
+    if not query_text or len(query_text.strip()) < 2:
+        return '<div class="parse-lens" style="font-style:italic;color:#64748b;">Type a query above to inspect dependency parse tree in real time...</div>'
+    try:
+        tree = extract_parse_tree(query_text)
+        return render_tree_html(tree)
+    except Exception as exc:  # noqa: BLE001
+        return f'<div class="parse-lens" style="color:#f87171;">Parse Lens error: {exc}</div>'
+
 
 # ---------------------------------------------------------------------------
 # JavaScript injected on load
@@ -692,12 +782,13 @@ def process_query(query: str):
         log.append(("muted", "🔬 Running no-match diagnosis…"))
         yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
         try:
-            diag = run_diagnosis(
-                filter_dict.get("filters", {}),
-                _QDRANT_CLIENT,
-                _COLLECTION,
+            diag_res = diagnose_no_match(
+                query_str=query,
+                structured_filter=filter_dict.get("filters", {}),
+                collection_name=_COLLECTION,
+                qdrant_client=_QDRANT_CLIENT,
             )
-            diag_html = diag["html"]
+            diag_html = render_diagnosis_html(diag_res)
         except Exception as exc:  # noqa: BLE001
             logger.warning("diagnosis failed: %s", exc)
             diag_html = _NO_MATCH_HTML   # fall back to static panel
@@ -728,127 +819,419 @@ def process_query(query: str):
 # Build the Gradio app
 # ---------------------------------------------------------------------------
 
+def _build_ingest_tab() -> None:
+    """
+    Build the Live Ingest tab contents.
+    Called inside the gr.Blocks context from build_app().
+    """
+    import tempfile
+    # ── Session state (per-user Qdrant client + collection) ──────────────
+    # Stored in gr.State so each user's ingest is isolated
+    ingest_client_state    = gr.State(value=None)
+    ingest_collection_state = gr.State(value="")
+
+    # ── Header ────────────────────────────────────────────────────────────
+    gr.HTML("""
+    <div style="padding: 20px 0 12px;">
+      <h2 style="margin:0;font-size:1.3rem;font-weight:700;
+                 background:linear-gradient(90deg,#10b981,#34d399);
+                 -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+                 background-clip:text;">🎬 Live Video Ingest</h2>
+      <p style="color:#475569;font-size:0.88rem;margin:4px 0 0;">
+        Drop a video file — the pipeline runs locally, no cloud calls.
+      </p>
+    </div>
+    """)
+
+    with gr.Row():
+        with gr.Column(scale=1):
+            # ── Upload & Controls ─────────────────────────────────────────
+            video_file = gr.File(
+                label="📂 Drop video here (.mp4 .mov .avi .mkv)",
+                file_types=[".mp4", ".mov", ".avi", ".mkv"],
+                elem_classes=["ingest-upload"],
+            )
+            ingest_btn = gr.Button(
+                "▶ Start Live Ingest",
+                variant="primary",
+                elem_classes=["ingest-btn"],
+                interactive=True,
+            )
+            status_label = gr.HTML(
+                '<div class="status-idle">⌛ Waiting for a video file…</div>',
+                label="",
+            )
+            progress_slider = gr.Slider(
+                minimum=0, maximum=100, value=0, step=1,
+                label="Ingest Progress",
+                interactive=False,
+            )
+            stats_json = gr.JSON(
+                value={"scenes": 0, "keyframes": 0,
+                       "objects_detected": 0, "elapsed_s": 0},
+                label="📊 Live Stats",
+            )
+
+        with gr.Column(scale=2):
+            # ── Processing log ────────────────────────────────────────────
+            gr.HTML('<div class="panel-label">Processing Log</div>')
+            ingest_log = gr.Textbox(
+                value="",
+                placeholder="Processing log will appear here…",
+                label="",
+                lines=18,
+                max_lines=18,
+                elem_classes=["ingest-log"],
+                interactive=False,
+            )
+
+    # ── Query section (hidden until ingest completes) ─────────────────────
+    with gr.Group(visible=False, elem_classes=["query-reveal"]) as query_reveal_group:
+        gr.HTML("""
+        <div style="padding: 4px 0 12px;">
+          <h3 style="margin:0;color:#10b981;font-size:1rem;font-weight:600;">
+            ✅ Video indexed — search it now!
+          </h3>
+          <p style="color:#475569;font-size:0.82rem;margin:4px 0 0;">
+            Try: "person in red" · "person without helmet" · "person left of car"
+          </p>
+        </div>
+        """)
+        with gr.Row():
+            live_query_box = gr.Textbox(
+                placeholder="Ask about this video in natural language…",
+                label="",
+                scale=5,
+                lines=1,
+                max_lines=1,
+                elem_id="live-query-input",
+            )
+            live_search_btn = gr.Button(
+                "🔍 Search", variant="primary", scale=1, min_width=120
+            )
+
+        live_parse_lens_output = gr.HTML(
+            update_parse_lens(""),
+            elem_id="live-parse-lens-panel",
+        )
+
+        live_query_box.change(
+            fn=update_parse_lens,
+            inputs=[live_query_box],
+            outputs=[live_parse_lens_output],
+            show_progress="hidden",
+        )
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.HTML('<div class="panel-label">Processing Log</div>')
+                live_log_output = gr.HTML(
+                    _log_html([("muted", "⌛ Query log will appear here…")]),
+                    elem_id="live-log-panel",
+                )
+            with gr.Column(scale=2):
+                gr.HTML('<div class="panel-label">Results</div>')
+                live_results_output = gr.HTML(
+                    _NO_RESULTS_HTML, elem_id="live-results-panel"
+                )
+
+        live_video_output = gr.HTML(
+            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            elem_id="live-video-panel",
+        )
+
+    # ── Event: run ingest ─────────────────────────────────────────────────
+    def _run_ingest(file_obj, progress=gr.Progress(track_tqdm=False)):
+        """
+        Gradio generator: runs LiveIngestor and yields UI updates.
+        Receives a file upload dict from gr.File.
+        """
+        if file_obj is None:
+            yield (
+                '<div class="status-error">❌ No file uploaded. Please drop a video first.</div>',
+                0,
+                "Please upload a video file first.",
+                {"scenes": 0, "keyframes": 0, "objects_detected": 0, "elapsed_s": 0},
+                gr.update(visible=False),
+                None,
+                "",
+            )
+            return
+
+        # gr.File yields a dict with 'name' (temp path) in Gradio 4+
+        if isinstance(file_obj, dict):
+            video_path = file_obj.get("name") or file_obj.get("path", "")
+        elif hasattr(file_obj, "name"):
+            video_path = file_obj.name
+        else:
+            video_path = str(file_obj)
+
+        if not video_path or not os.path.isfile(video_path):
+            yield (
+                '<div class="status-error">❌ File path invalid or file not found.</div>',
+                0,
+                f"File not found: {video_path}",
+                {},
+                gr.update(visible=False),
+                None,
+                "",
+            )
+            return
+
+        # Use a temp subdir for frames (cleaned up on next ingest)
+        frames_dir = os.path.join(tempfile.gettempdir(), "ask_n_seek_frames")
+        os.makedirs(frames_dir, exist_ok=True)
+
+        ingest_config = IngestConfig(
+            frames_output_dir=frames_dir,
+            max_log_lines=200,
+            yield_every_n_frames=1,
+        )
+
+        last_client = None
+        last_collection = ""
+
+        for prog in _LIVE_INGESTOR.ingest(video_path, ingest_config):
+            log_text = "\n".join(prog.log_lines)
+
+            if prog.error:
+                status_html = f'<div class="status-error">❌ {prog.phase_human}</div>'
+            elif prog.complete:
+                status_html = '<div class="status-done">✅ Ready to search!</div>'
+                last_client     = _LIVE_INGESTOR.last_client
+                last_collection = _LIVE_INGESTOR.last_collection or ""
+            else:
+                status_html = f'<div class="status-running">⚙️ {prog.phase_human}</div>'
+
+            # Stats display (exclude internal references)
+            display_stats = {k: v for k, v in prog.stats.items()
+                             if k not in ("qdrant_client_ref", "collection_name")}
+
+            yield (
+                status_html,
+                int(prog.percent),
+                log_text,
+                display_stats,
+                gr.update(visible=prog.complete and not prog.error),
+                last_client,
+                last_collection,
+            )
+
+            if prog.complete:
+                return
+
+    ingest_outputs = [
+        status_label,
+        progress_slider,
+        ingest_log,
+        stats_json,
+        query_reveal_group,
+        ingest_client_state,
+        ingest_collection_state,
+    ]
+
+    ingest_btn.click(
+        fn=_run_ingest,
+        inputs=[video_file],
+        outputs=ingest_outputs,
+    )
+
+    # ── Event: live query search using ingested collection ────────────────
+    def _live_search(query_text, client, collection):
+        """Search the just-ingested video collection."""
+        if not client or not collection:
+            yield (
+                _log_html([("warn", "⚠️ No video indexed yet — please ingest a video first")]),
+                _NO_RESULTS_HTML,
+                _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            )
+            return
+        # Delegate to the same process_query logic but against live collection
+        threshold = load_threshold()
+        log: list[tuple[str, str]] = []
+
+        log.append(("info", "⏳ Parsing query…"))
+        yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+
+        filter_dict = parse_query(query_text)
+        filters_display = json.dumps(filter_dict.get("filters", {}), indent=None)
+        log.append(("muted", f"🔍 Filter: <code>{filters_display}</code>"))
+        yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+
+        if filter_dict.get("status") != "match":
+            log.append(("warn", "⚠️ Parser returned no_match"))
+            yield _log_html(log), _NO_MATCH_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+            return
+
+        log.append(("info", "🔎 Searching ingested collection…"))
+        yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+
+        results = search_structured(filter_dict, client, collection)
+        log.append(("muted", f"📦 Found {len(results)} result(s)"))
+        yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+
+        best_score = results[0].confidence_score if results else 0.0
+        if not results or best_score < threshold:
+            log.append(("fail", f"🔴 Threshold: FAIL — score {best_score:.2f} < {threshold:.2f}"))
+            yield _log_html(log), _NO_MATCH_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+            return
+
+        log.append(("pass", f"✅ Threshold: PASS — score {best_score:.2f} ≥ {threshold:.2f}"))
+        log.append(("pass", f"🎯 {len(results)} result(s)"))
+        results_html = render_results_html(results)
+        yield (
+            _log_html(log),
+            results_html,
+            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        )
+
+    live_search_inputs  = [live_query_box, ingest_client_state, ingest_collection_state]
+    live_search_outputs = [live_log_output, live_results_output, live_video_output]
+
+    live_search_btn.click(fn=_live_search, inputs=live_search_inputs, outputs=live_search_outputs)
+    live_query_box.submit(fn=_live_search, inputs=live_search_inputs, outputs=live_search_outputs)
+
+
 def build_app() -> gr.Blocks:
     with gr.Blocks(
-        title="Odysseus — Video Query Engine",
+        title="Ask-N-Seek — Natural Language Video Retrieval",
     ) as demo:
 
         # ── Header ──────────────────────────────────────────────────────────
         gr.HTML("""
         <div class="app-header">
-            <h1 class="app-title">🎯 Odysseus</h1>
-            <p class="app-subtitle">Natural Language Video Query Engine</p>
-            <span class="app-badge">Milestone 1 · Stub-Wired</span>
+            <h1 class="app-title">🎯 Ask-N-Seek</h1>
+            <p class="app-subtitle">Natural Language Video Retrieval · Fully Offline</p>
+            <span class="app-badge">stable_merge · Live Ingest Enabled</span>
         </div>
         """)
 
-        # ── Query row ────────────────────────────────────────────────────────
-        with gr.Row(elem_classes=["query-row"]):
-            query_box = gr.Textbox(
-                placeholder=(
-                    "Try: 'person in red'  ·  'person without helmet'  ·  "
-                    "'two people'  ·  'person left of car'"
-                ),
-                label="",
-                scale=5,
-                lines=1,
-                max_lines=1,
-                elem_id="query-input",
-            )
-            submit_btn = gr.Button("🔍 Search", variant="primary", scale=1, min_width=120)
+        # ── Tabs ─────────────────────────────────────────────────────────────
+        with gr.Tabs():
+          with gr.TabItem("🔍 Stub Query", id="tab-stub"):
 
-        # ── Middle row ───────────────────────────────────────────────────────
-        with gr.Row():
-            # Processing log
-            with gr.Column(scale=1):
-                gr.HTML('<div class="panel-label">Processing Log</div>')
-                log_output = gr.HTML(
-                    _log_html([("muted", "⌛ Waiting for query…")]),
-                    elem_id="log-panel",
+            # ── Query row ──────────────────────────────────────────────────
+            with gr.Row(elem_classes=["query-row"]):
+                query_box = gr.Textbox(
+                    placeholder=(
+                        "Try: 'person in red'  ·  'person without helmet'  ·  "
+                        "'two people'  ·  'person left of car'"
+                    ),
+                    label="",
+                    scale=5,
+                    lines=1,
+                    max_lines=1,
+                    elem_id="query-input",
                 )
+                submit_btn = gr.Button("🔍 Search", variant="primary", scale=1, min_width=120)
 
-            # Results
-            with gr.Column(scale=2):
-                gr.HTML('<div class="panel-label">Results</div>')
-                results_output = gr.HTML(_NO_RESULTS_HTML, elem_id="results-panel")
-
-        # ── Video player ─────────────────────────────────────────────────────
-        gr.HTML('<div class="panel-label" style="margin-top:16px;">Video Player</div>')
-        video_output = gr.HTML(
-            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
-            elem_id="video-panel",
-        )
-
-        # Hidden textbox for JS→Python card-click notification
-        selected_card_data = gr.Textbox(
-            visible=False,
-            elem_id="odysseus-card-data",
-            label="",
-        )
-
-        # ── Quick-test buttons ────────────────────────────────────────────────
-        with gr.Accordion("📋 Verification Queries (Milestone 1 Checklist)", open=False):
-            gr.Markdown(
-                "Click any button to pre-fill the query box with a verification test case."
+            parse_lens_output = gr.HTML(
+                update_parse_lens(""),
+                elem_id="parse-lens-panel",
             )
+
+            query_box.change(
+                fn=update_parse_lens,
+                inputs=[query_box],
+                outputs=[parse_lens_output],
+                show_progress="hidden",
+            )
+
+            # ── Middle row ─────────────────────────────────────────────────
             with gr.Row():
-                for q in [
-                    "person in red",
-                    "person without helmet",
-                    "two people",
-                    "person left of car",
-                    "purple elephant",
-                ]:
-                    btn = gr.Button(q, size="sm")
-                    btn.click(lambda v=q: v, outputs=query_box)
+                # Processing log
+                with gr.Column(scale=1):
+                    gr.HTML('<div class="panel-label">Processing Log</div>')
+                    log_output = gr.HTML(
+                        _log_html([("muted", "⌛ Waiting for query…")]),
+                        elem_id="log-panel",
+                    )
 
-        # ── Footer ───────────────────────────────────────────────────────────
-        gr.HTML("""
-        <div style="text-align:center;padding:20px 0 8px;color:#1e1e3f;font-size:0.75rem;">
-            Odysseus Part 3 · Milestone 1 · Stub-Wired ·
-            No FAISS · No Embeddings · No LLM
-        </div>
-        """)
+                # Results
+                with gr.Column(scale=2):
+                    gr.HTML('<div class="panel-label">Results</div>')
+                    results_output = gr.HTML(_NO_RESULTS_HTML, elem_id="results-panel")
 
-        # ── Wire events ──────────────────────────────────────────────────────
-        search_inputs  = [query_box]
-        search_outputs = [log_output, results_output, video_output]
+            # ── Video player ───────────────────────────────────────────────
+            gr.HTML('<div class="panel-label" style="margin-top:16px;">Video Player</div>')
+            video_output = gr.HTML(
+                _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+                elem_id="video-panel",
+            )
 
-        def _threaded_process_query(query: str):
-            """
-            Thread-safe wrapper: runs process_query() in a background thread,
-            streams updates via a queue so the Gradio event loop never blocks.
-            Sentinel None signals the generator to stop.
-            """
-            q: queue.Queue = queue.Queue()
+            # Hidden textbox for JS→Python card-click notification
+            selected_card_data = gr.Textbox(
+                visible=False,
+                elem_id="odysseus-card-data",
+                label="",
+            )
 
-            def _worker():
-                try:
-                    for update in process_query(query):
-                        q.put(update)
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("process_query thread error: %s", exc)
-                finally:
-                    q.put(None)  # sentinel
+            # ── Quick-test buttons ─────────────────────────────────────────
+            with gr.Accordion("📋 Verification Queries (Milestone 1 Checklist)", open=False):
+                gr.Markdown(
+                    "Click any button to pre-fill the query box with a verification test case."
+                )
+                with gr.Row():
+                    for q in [
+                        "person in red",
+                        "person without helmet",
+                        "two people",
+                        "person left of car",
+                        "purple elephant",
+                    ]:
+                        btn = gr.Button(q, size="sm")
+                        btn.click(lambda v=q: v, outputs=query_box)
 
-            t = threading.Thread(target=_worker, daemon=True)
-            t.start()
+            # ── Footer ────────────────────────────────────────────────────
+            gr.HTML("""
+            <div style="text-align:center;padding:20px 0 8px;color:#1e1e3f;font-size:0.75rem;">
+                Ask-N-Seek · stable_merge · No FAISS · No Embeddings · No LLM
+            </div>
+            """)
 
-            while True:
-                item = q.get()
-                if item is None:
-                    break
-                yield item
+            # ── Wire events ───────────────────────────────────────────────
+            search_inputs  = [query_box]
+            search_outputs = [log_output, results_output, video_output]
 
-        submit_btn.click(
-            fn=_threaded_process_query,
-            inputs=search_inputs,
-            outputs=search_outputs,
-        )
-        query_box.submit(
-            fn=_threaded_process_query,
-            inputs=search_inputs,
-            outputs=search_outputs,
-        )
+            def _threaded_process_query(query: str):
+                """
+                Thread-safe wrapper: runs process_query() in a background thread,
+                streams updates via a queue so the Gradio event loop never blocks.
+                Sentinel None signals the generator to stop.
+                """
+                q: queue.Queue = queue.Queue()
+
+                def _worker():
+                    try:
+                        for update in process_query(query):
+                            q.put(update)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("process_query thread error: %s", exc)
+                    finally:
+                        q.put(None)  # sentinel
+
+                t = threading.Thread(target=_worker, daemon=True)
+                t.start()
+
+                while True:
+                    item = q.get()
+                    if item is None:
+                        break
+                    yield item
+
+            submit_btn.click(
+                fn=_threaded_process_query,
+                inputs=search_inputs,
+                outputs=search_outputs,
+            )
+            query_box.submit(
+                fn=_threaded_process_query,
+                inputs=search_inputs,
+                outputs=search_outputs,
+            )
+
+          # ── Live Ingest tab ───────────────────────────────────────────────
+          with gr.TabItem("🎬 Live Ingest", id="tab-ingest"):
+              _build_ingest_tab()
 
     return demo
