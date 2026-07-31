@@ -380,40 +380,39 @@ SETUP_JS = (
     f"window._ODYSSEUS_FRAME_TPL = {_FRAME_TPL_JS};\n\n"
 ) + """
 function setupOdysseus() {
-    // ── Card & History click handler ────────────────────────────────────
+    // ── Result card click: event delegation (works with gr.HTML sanitization)
+    // Gradio strips inline onclick attrs — this document listener is the ONLY
+    // reliable way to handle clicks on dynamically generated HTML in Gradio 6.
     document.addEventListener('click', function(e) {
-        const card = e.target.closest('[data-video-id]');
+        var card = e.target.closest('.result-card');
         if (card) {
-            const videoId  = card.dataset.videoId;
-            const ts       = parseFloat(card.dataset.timestamp);
+            var videoPath = card.getAttribute('data-video-path') || '';
+            var ts        = parseFloat(card.getAttribute('data-timestamp') || '0');
 
             // Visual: toggle selected state
-            document.querySelectorAll('.result-card').forEach(c => c.classList.remove('selected'));
+            document.querySelectorAll('.result-card').forEach(function(c) {
+                c.classList.remove('selected');
+            });
             card.classList.add('selected');
 
-            // Update video player directly (no Python round-trip needed for UX)
-            _updateVideoPlayer(videoId, ts);
-
-            // Also notify Python via hidden Gradio input for state tracking
-            _notifyGradio('odysseus-card-data', JSON.stringify({video_id: videoId, timestamp: ts}));
+            _updateVideoPlayer(videoPath, ts);
             return;
         }
 
-        const historyItem = e.target.closest('[data-history-query]');
+        // ── History item click: re-run query ─────────────────────────────
+        var historyItem = e.target.closest('[data-history-query]');
         if (historyItem) {
-            const qText = historyItem.dataset.historyQuery;
-            const inputEl = document.querySelector('#query-input textarea') || document.querySelector('#query-input input');
+            var qText = historyItem.getAttribute('data-history-query');
+            var inputEl = document.querySelector('#query-input textarea') || document.querySelector('#query-input input');
             if (inputEl) {
-                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set ||
-                               Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-                if (setter) {
-                    setter.call(inputEl, qText);
-                } else {
-                    inputEl.value = qText;
-                }
+                var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value') &&
+                             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                if (!setter) setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value') &&
+                                       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+                if (setter) setter.call(inputEl, qText); else inputEl.value = qText;
                 inputEl.dispatchEvent(new Event('input', { bubbles: true }));
                 setTimeout(function() {
-                    const submitBtn = document.querySelector('.query-row button') || document.querySelector('#submit-btn');
+                    var submitBtn = document.querySelector('.query-row button') || document.querySelector('#submit-btn');
                     if (submitBtn) submitBtn.click();
                 }, 50);
             }
@@ -458,27 +457,17 @@ function _notifyGradio(elemId, value) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-// FIX 3+: Poll ingest log for control markers injected by Python on complete.
+// Auto-focus query box when ingestion completes (__FOCUS_QUERY__ marker).
 setInterval(function() {
-    const logEl = document.querySelector('#ingest-log textarea') ||
-                  document.querySelector('#ingest-log input');
-    if (!logEl || !logEl.value) return;
-
-    // Auto-focus query box
-    if (logEl.value.includes('__FOCUS_QUERY__')) {
-        const inputEl = document.querySelector('#query-input textarea') ||
-                        document.querySelector('#query-input input');
+    var logEl = document.querySelector('#ingest-log textarea') ||
+                document.querySelector('#ingest-log input');
+    if (logEl && logEl.value && logEl.value.includes('__FOCUS_QUERY__')) {
+        var inputEl = document.querySelector('#query-input textarea') ||
+                      document.querySelector('#query-input input');
         if (inputEl) {
             inputEl.focus();
             logEl.value = logEl.value.replace('__FOCUS_QUERY__', '');
         }
-    }
-
-    // Set video path global — avoids unreliable Gradio 6 DOM reading
-    const pathMatch = logEl.value.match(/__SET_VIDEO_PATH__:([^\n]+)/);
-    if (pathMatch) {
-        window._ODYSSEUS_VIDEO_PATH = pathMatch[1].trim();
-        logEl.value = logEl.value.replace(/__SET_VIDEO_PATH__:[^\n]+/, '');
     }
 }, 500);
 
@@ -609,8 +598,7 @@ def render_result_card(result: Result, explanation: str, idx: int, video_path: s
 <div class="result-card"
      data-video-path="{video_path}"
      data-timestamp="{ts}"
-     id="result-card-{idx}"
-     onclick="var c=this; document.querySelectorAll('.result-card').forEach(function(x){{x.classList.remove('selected');}}); c.classList.add('selected'); _updateVideoPlayer(c.dataset.videoPath, parseFloat(c.dataset.timestamp));">
+     id="result-card-{idx}">
 
     <div class="result-card-header">
         <span class="vid-label">📹 {vid_id}</span>
