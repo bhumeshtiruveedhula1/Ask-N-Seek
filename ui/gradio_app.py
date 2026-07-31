@@ -19,11 +19,15 @@ No video selected  : Bottom player shows placeholder message.
 
 from __future__ import annotations
 
+import datetime
+import difflib
 import json
-import queue
-import sys
 import os
+import queue
+import string
+import sys
 import threading
+from datetime import datetime
 
 # Make the project root importable when running from any CWD
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,6 +44,8 @@ from engine.search import search_structured, Result
 from engine.explanation import generate_explanation
 from engine.diagnosis import run_diagnosis
 from engine.live_ingestor import LiveIngestor
+from backend.vision.vocabulary import VOCABULARY, VOCABULARY_SET, SYNONYM_MAP
+from backend.query.patterns import COLOR_VOCAB, COLOR_ALIASES
 
 # ---------------------------------------------------------------------------
 # Initialise Qdrant client (module-level singleton)
@@ -374,23 +380,44 @@ SETUP_JS = (
     f"window._ODYSSEUS_FRAME_TPL = {_FRAME_TPL_JS};\n\n"
 ) + """
 function setupOdysseus() {
-    // ── Card click handler ──────────────────────────────────────────────
+    // ── Card & History click handler ────────────────────────────────────
     document.addEventListener('click', function(e) {
         const card = e.target.closest('[data-video-id]');
-        if (!card) return;
+        if (card) {
+            const videoId  = card.dataset.videoId;
+            const ts       = parseFloat(card.dataset.timestamp);
 
-        const videoId  = card.dataset.videoId;
-        const ts       = parseFloat(card.dataset.timestamp);
+            // Visual: toggle selected state
+            document.querySelectorAll('.result-card').forEach(c => c.classList.remove('selected'));
+            card.classList.add('selected');
 
-        // Visual: toggle selected state
-        document.querySelectorAll('.result-card').forEach(c => c.classList.remove('selected'));
-        card.classList.add('selected');
+            // Update video player directly (no Python round-trip needed for UX)
+            _updateVideoPlayer(videoId, ts);
 
-        // Update video player directly (no Python round-trip needed for UX)
-        _updateVideoPlayer(videoId, ts);
+            // Also notify Python via hidden Gradio input for state tracking
+            _notifyGradio('odysseus-card-data', JSON.stringify({video_id: videoId, timestamp: ts}));
+            return;
+        }
 
-        // Also notify Python via hidden Gradio input for state tracking
-        _notifyGradio('odysseus-card-data', JSON.stringify({video_id: videoId, timestamp: ts}));
+        const historyItem = e.target.closest('[data-history-query]');
+        if (historyItem) {
+            const qText = historyItem.dataset.historyQuery;
+            const inputEl = document.querySelector('#query-input textarea') || document.querySelector('#query-input input');
+            if (inputEl) {
+                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set ||
+                               Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+                if (setter) {
+                    setter.call(inputEl, qText);
+                } else {
+                    inputEl.value = qText;
+                }
+                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+                setTimeout(function() {
+                    const submitBtn = document.querySelector('.query-row button') || document.querySelector('#submit-btn');
+                    if (submitBtn) submitBtn.click();
+                }, 50);
+            }
+        }
     });
 }
 
@@ -620,64 +647,242 @@ def _log_html(lines: list[tuple[str, str]]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Vocabulary Coverage & History Helpers (U2 / U3)
+# ---------------------------------------------------------------------------
+
+QUERY_SYNTAX_WORDS: set[str] = {
+    "in", "on", "at", "with", "without", "no", "not", "of", "to", "the", "a", "an",
+    "and", "or", "left", "right", "is", "are", "has", "have", "wearing", "less",
+    "top", "bottom", "near", "beside", "one", "two", "three", "four", "five", "six",
+    "seven", "eight", "nine", "ten", "couple", "few", "several", "more", "fewer",
+    "than", "least", "exactly", "person", "people", "man", "woman", "child", "car",
+}
+
+KNOWN_TOKENS: set[str] = (
+    VOCABULARY_SET
+    | set(SYNONYM_MAP.keys())
+    | set(SYNONYM_MAP.values())
+    | COLOR_VOCAB
+    | set(COLOR_ALIASES.keys())
+    | QUERY_SYNTAX_WORDS
+)
+
+
+def check_vocabulary_banner(query: str) -> str:
+    """Check query tokens against vocabulary and generate OOV warning banner HTML."""
+    punct_trans = str.maketrans(string.punctuation, " " * len(string.punctuation))
+    clean_q = query.translate(punct_trans).lower()
+    tokens = clean_q.split()
+    oov_messages = []
+
+    for token in tokens:
+        if token in KNOWN_TOKENS or token.isdigit():
+            continue
+        matches = difflib.get_close_matches(token, VOCABULARY, n=1, cutoff=0.6)
+        if matches:
+            oov_messages.append(f"⚠️ '{token}' not in vocabulary. Did you mean: '{matches[0]}'?")
+        else:
+            oov_messages.append(f"⚠️ '{token}' not recognized — try a different term.")
+
+    if not oov_messages:
+        return ""
+
+    banner_items = "<br>".join(oov_messages)
+    return f"""
+    <div style="
+        background:#451a03;
+        border:1px solid #f59e0b;
+        color:#fef3c7;
+        padding:10px 14px;
+        border-radius:8px;
+        margin-bottom:12px;
+        font-size:0.88rem;
+    ">
+        {banner_items}
+    </div>
+    """
+
+
+def render_history_html(history: list[dict] | None) -> str:
+    """Render session query history as scrollable HTML panel with click-to-replay."""
+    if not history:
+        return """
+        <div style="color:#64748b;font-size:0.85rem;padding:8px 0;font-style:italic;">
+            No queries submitted yet in this session.
+        </div>
+        """
+    items = []
+    for item in history:
+        q_text = item.get("query_text", "")
+        ts = item.get("timestamp", "")
+        cnt = item.get("result_count", 0)
+        score = item.get("top_score", 0.0)
+        q_attr = q_text.replace('"', '&quot;')
+
+        items.append(f"""
+        <div class="history-item" data-history-query="{q_attr}" style="
+            background:#0f172a;
+            border:1px solid #1e293b;
+            border-radius:6px;
+            padding:8px 12px;
+            margin-bottom:6px;
+            font-size:0.85rem;
+            color:#cbd5e1;
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            cursor:pointer;
+        ">
+            <div>
+                <b style="color:#f8fafc;">Q: {q_text}</b>
+                <span style="color:#64748b;margin:0 6px;">|</span>
+                <span>{cnt} result{'s' if cnt != 1 else ''}</span>
+                <span style="color:#64748b;margin:0 6px;">|</span>
+                <span>score {score:.2f}</span>
+            </div>
+            <div>
+                <span style="color:#64748b;font-size:0.75rem;margin-right:10px;">{ts}</span>
+                <span class="rerun-btn" style="
+                    background:#3b82f6;
+                    color:#ffffff;
+                    padding:2px 8px;
+                    border-radius:4px;
+                    font-size:0.75rem;
+                    font-weight:500;
+                ">&#x25B6; Re-run</span>
+            </div>
+        </div>
+        """)
+    return f"""
+    <div style="max-height:220px;overflow-y:auto;padding-right:4px;">
+        {''.join(items)}
+    </div>
+    """
+
+
+# ---------------------------------------------------------------------------
 # Core generator — drives the Gradio streaming update
 # ---------------------------------------------------------------------------
 
-def process_query(query: str):
+def process_query(
+    query: str,
+    collection_name: str | None = None,
+    history: list[dict] | None = None,
+):
     """
-    Gradio generator function. Yields (log_html, results_html, video_html)
+    Gradio generator function. Yields (log_html, results_html, video_html, banner_html, history_html, history_list)
     tuples so each processing step appears live in the UI.
     """
+    target_coll = collection_name or _COLLECTION
+    history_list = list(history or [])
+
     if not query or not query.strip():
         yield (
             _log_html([("muted", "⌛ Waiting for a query…")]),
             _NO_RESULTS_HTML,
             _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            "",
+            render_history_html(history_list),
+            history_list,
         )
         return
 
+    banner_html = check_vocabulary_banner(query)
     threshold = load_threshold()
     log: list[tuple[str, str]] = []
 
     # ── Step 1: Parse ───────────────────────────────────────────────────────
     log.append(("info", "⏳ Parsing query…"))
-    yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+    yield (
+        _log_html(log),
+        _LOADING_HTML,
+        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        banner_html,
+        render_history_html(history_list),
+        history_list,
+    )
 
-    # TODO: SWAP FOR ACHILLES — parser routed via parser_gateway (config.PARSER_MODULE)
     filter_dict = parse_query(query)
     filters_display = json.dumps(filter_dict.get("filters", {}), indent=None)
     log.append(("muted", f"🔍 Filter: <code>{filters_display}</code>"))
-    yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+    yield (
+        _log_html(log),
+        _LOADING_HTML,
+        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        banner_html,
+        render_history_html(history_list),
+        history_list,
+    )
 
     # ── No-match from parser ─────────────────────────────────────────────────
     if filter_dict.get("status") != "match":
         log.append(("warn", "⚠️  Parser returned no_match — query not understood"))
         log.append(("fail", f"🔴 Threshold check: FAIL — best score 0.00 &lt; threshold {threshold:.2f}"))
+
+        entry = {
+            "query_text": query,
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "parsed_filter": filter_dict.get("filters", {}),
+            "result_count": 0,
+            "top_score": 0.0,
+        }
+        history_list = [entry] + history_list
+
         yield (
             _log_html(log),
             _NO_MATCH_HTML,
             _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            banner_html,
+            render_history_html(history_list),
+            history_list,
         )
         return
 
     # ── Step 2: Search ───────────────────────────────────────────────────────
-    log.append(("info", "🔎 Searching Qdrant…"))
-    yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+    log.append(("info", f"🔎 Searching Qdrant ({target_coll})…"))
+    yield (
+        _log_html(log),
+        _LOADING_HTML,
+        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        banner_html,
+        render_history_html(history_list),
+        history_list,
+    )
 
-    results = search_structured(filter_dict, _QDRANT_CLIENT, _COLLECTION)
+    results = search_structured(filter_dict, _QDRANT_CLIENT, target_coll)
 
-    log.append(("muted", f"📦 Found {len(results)} raw result(s) from {_STUB_ROW_COUNT}-row stub"))
-    yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+    log.append(("muted", f"📦 Found {len(results)} raw result(s)"))
+    yield (
+        _log_html(log),
+        _LOADING_HTML,
+        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        banner_html,
+        render_history_html(history_list),
+        history_list,
+    )
 
     # ── Step 3: Rerank ───────────────────────────────────────────────────────
     log.append(("info", "📊 Reranking by confidence…"))
-    yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
-
-    # (results already sorted by search_structured)
+    yield (
+        _log_html(log),
+        _LOADING_HTML,
+        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        banner_html,
+        render_history_html(history_list),
+        history_list,
+    )
 
     # ── Step 4: Group ────────────────────────────────────────────────────────
     log.append(("muted", "📂 Grouping by source video…"))
-    yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+    yield (
+        _log_html(log),
+        _LOADING_HTML,
+        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        banner_html,
+        render_history_html(history_list),
+        history_list,
+    )
 
     # ── Step 5: Threshold ────────────────────────────────────────────────────
     best_score = results[0].confidence_score if results else 0.0
@@ -687,25 +892,52 @@ def process_query(query: str):
             "fail",
             f"🔴 Threshold check: FAIL — best score {best_score:.2f} &lt; threshold {threshold:.2f}",
         ))
-        yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+        yield (
+            _log_html(log),
+            _LOADING_HTML,
+            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            banner_html,
+            render_history_html(history_list),
+            history_list,
+        )
 
         # Run constraint-level diagnosis and replace static no-match panel
         log.append(("muted", "🔬 Running no-match diagnosis…"))
-        yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+        yield (
+            _log_html(log),
+            _LOADING_HTML,
+            _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            banner_html,
+            render_history_html(history_list),
+            history_list,
+        )
         try:
             diag = run_diagnosis(
                 filter_dict.get("filters", {}),
                 _QDRANT_CLIENT,
-                _COLLECTION,
+                target_coll,
             )
             diag_html = diag["html"]
         except Exception as exc:  # noqa: BLE001
             logger.warning("diagnosis failed: %s", exc)
             diag_html = _NO_MATCH_HTML   # fall back to static panel
+
+        entry = {
+            "query_text": query,
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "parsed_filter": filter_dict.get("filters", {}),
+            "result_count": len(results),
+            "top_score": round(best_score, 2),
+        }
+        history_list = [entry] + history_list
+
         yield (
             _log_html(log),
             diag_html,
             _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+            banner_html,
+            render_history_html(history_list),
+            history_list,
         )
         return
 
@@ -713,15 +945,35 @@ def process_query(query: str):
         "pass",
         f"✅ Threshold check: PASS — best score {best_score:.2f} ≥ threshold {threshold:.2f}",
     ))
-    yield _log_html(log), _LOADING_HTML, _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+    yield (
+        _log_html(log),
+        _LOADING_HTML,
+        _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        banner_html,
+        render_history_html(history_list),
+        history_list,
+    )
 
     # ── Step 6: Render ───────────────────────────────────────────────────────
     log.append(("pass", f"🎯 Returning {len(results)} result(s) — click a card to seek video"))
     results_html = render_results_html(results)
+
+    entry = {
+        "query_text": query,
+        "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "parsed_filter": filter_dict.get("filters", {}),
+        "result_count": len(results),
+        "top_score": round(best_score, 2),
+    }
+    history_list = [entry] + history_list
+
     yield (
         _log_html(log),
         results_html,
         _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
+        banner_html,
+        render_history_html(history_list),
+        history_list,
     )
 
 
@@ -743,10 +995,9 @@ def build_app() -> gr.Blocks:
         </div>
         """)
 
-        # ── Judge session state ──────────────────────────────────────────────
-        # Stores the active judge collection name so queries target it.
-        # None = fall back to default stub/real collection.
+        # ── Session state ───────────────────────────────────────────────────
         judge_collection = gr.State(value=None)
+        query_history    = gr.State(value=[])
 
         # ── Ingestion panel ──────────────────────────────────────────────────
         with gr.Accordion("📥 Live Judge-Video Ingestion", open=True):
@@ -810,6 +1061,7 @@ def build_app() -> gr.Blocks:
             # Results
             with gr.Column(scale=2):
                 gr.HTML('<div class="panel-label">Results</div>')
+                vocab_banner = gr.HTML("", elem_id="vocab-banner")
                 results_output = gr.HTML(_NO_RESULTS_HTML, elem_id="results-panel")
 
         # ── Video player ─────────────────────────────────────────────────────
@@ -818,6 +1070,10 @@ def build_app() -> gr.Blocks:
             _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML),
             elem_id="video-panel",
         )
+
+        # ── Query History Panel (U2) ─────────────────────────────────────────
+        with gr.Accordion("📜 Session Query History", open=True):
+            history_panel = gr.HTML(render_history_html([]), elem_id="history-panel")
 
         # Hidden textbox for JS→Python card-click notification
         selected_card_data = gr.Textbox(
@@ -851,10 +1107,14 @@ def build_app() -> gr.Blocks:
         """)
 
         # ── Wire events ──────────────────────────────────────────────────────
-        search_inputs  = [query_box]
-        search_outputs = [log_output, results_output, video_output]
+        search_inputs  = [query_box, judge_collection, query_history]
+        search_outputs = [log_output, results_output, video_output, vocab_banner, history_panel, query_history]
 
-        def _threaded_process_query(query: str):
+        def _threaded_process_query(
+            query: str,
+            collection_name: str | None = None,
+            history: list[dict] | None = None,
+        ):
             """
             Thread-safe wrapper: runs process_query() in a background thread,
             streams updates via a queue so the Gradio event loop never blocks.
@@ -864,7 +1124,7 @@ def build_app() -> gr.Blocks:
 
             def _worker():
                 try:
-                    for update in process_query(query):
+                    for update in process_query(query, collection_name, history):
                         q.put(update)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("process_query thread error: %s", exc)
