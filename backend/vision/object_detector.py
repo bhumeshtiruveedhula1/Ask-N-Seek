@@ -139,6 +139,13 @@ class ObjectDetector:
             logger.warning("detect() received empty frame: %s", frame_path)
             return []
 
+        # -- GPU usage logging (every 50 frames to avoid console flood) ------
+        self._detect_count = getattr(self, "_detect_count", 0) + 1
+        if self._detect_count % 50 == 1 and self._device == "cuda":
+            import torch
+            mem_mb = torch.cuda.memory_allocated() / 1e6
+            logger.info("[GPU] frame=%d  CUDA memory allocated: %.0f MB", self._detect_count, mem_mb)
+
         # -- Run inference (single frame, no streaming, no batch) --------
         results = self._model.predict(
             source=frame_bgr,

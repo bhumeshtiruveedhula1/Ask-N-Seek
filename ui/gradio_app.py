@@ -421,51 +421,32 @@ function setupOdysseus() {
     });
 }
 
-function _updateVideoPlayer(videoId, timestamp) {
+function _updateVideoPlayer(videoPath, timestamp) {
     const container = document.getElementById('video-player-inner');
     if (!container) return;
 
-    // Primary: JS global set by inline <script> injected into ingest-log on complete
-    // Fallback: read hidden Gradio textbox (may lag by one Gradio re-render cycle)
-    let uploadedPath = window._ODYSSEUS_VIDEO_PATH || '';
-    if (!uploadedPath) {
-        // Gradio 6 wraps textbox in a div; try both textarea and input selectors
-        const pathEl = document.querySelector('#current-video-path textarea') ||
-                       document.querySelector('#current-video-path input') ||
-                       document.querySelector('[id*="current-video-path"] textarea') ||
-                       document.querySelector('[id*="current-video-path"] input');
-        uploadedPath = pathEl ? pathEl.value.trim() : '';
-    }
-
-    let videoUrl;
-    if (uploadedPath) {
-        // CRITICAL: do NOT encodeURIComponent — Gradio's /file= route uses :path
-        // which accepts raw paths. Encoding backslashes (%5C) breaks Windows paths.
-        videoUrl = '/file=' + uploadedPath;
-    } else {
-        const rawTpl = window._ODYSSEUS_VIDEO_TPL || '';
-        videoUrl = rawTpl ? rawTpl.replace('{video_id}', videoId) : '';
-    }
-
-    if (!videoUrl) {
+    if (!videoPath || videoPath === 'None' || videoPath === '') {
         container.innerHTML = '<p style="color:#475569;text-align:center;padding:32px 0;">🎬 No video loaded — drop a video file to begin.</p>';
         return;
     }
 
+    // Gradio 6: /file= + raw path (NO encodeURIComponent — breaks Windows backslashes)
+    const videoUrl = '/file=' + videoPath;
+
     container.innerHTML = `
         <div class="video-info-bar">
-            <span class="vid-badge">📹 ${videoId}</span>
+            <span class="vid-badge">📹 Video</span>
             <span class="time-badge">⏱ ${timestamp.toFixed(1)}s</span>
         </div>
-        <video id="main-player" controls style="width:100%;border-radius:8px;background:#000;">
+        <video id="main-player" controls
+               style="width:100%;border-radius:8px;background:#000;">
             <source src="${videoUrl}" type="video/mp4">
         </video>
     `;
     const vid = document.getElementById('main-player');
     if (vid) {
         vid.addEventListener('loadedmetadata', () => { vid.currentTime = timestamp; });
-        // Fallback for cached metadata
-        setTimeout(() => { if (!isNaN(vid.duration)) vid.currentTime = timestamp; }, 200);
+        setTimeout(() => { if (vid.readyState >= 1) vid.currentTime = timestamp; }, 200);
     }
 }
 
@@ -587,7 +568,7 @@ def _bbox_thumb_svg(bbox: list[float]) -> str:
     )
 
 
-def render_result_card(result: Result, explanation: str, idx: int) -> str:
+def render_result_card(result: Result, explanation: str, idx: int, video_path: str = "") -> str:
     """Render one result as an HTML card with click attributes."""
     # TODO: SWAP FOR ACHILLES'S REAL IMPLEMENTATION
     # Replace thumb_icon with real frame image using get_frame_path():
@@ -626,9 +607,10 @@ def render_result_card(result: Result, explanation: str, idx: int) -> str:
 
     return f"""
 <div class="result-card"
-     data-video-id="{vid_id}"
+     data-video-path="{video_path}"
      data-timestamp="{ts}"
-     id="result-card-{idx}">
+     id="result-card-{idx}"
+     onclick="var c=this; document.querySelectorAll('.result-card').forEach(function(x){{x.classList.remove('selected');}}); c.classList.add('selected'); _updateVideoPlayer(c.dataset.videoPath, parseFloat(c.dataset.timestamp));">
 
     <div class="result-card-header">
         <span class="vid-label">📹 {vid_id}</span>
@@ -653,11 +635,11 @@ def render_result_card(result: Result, explanation: str, idx: int) -> str:
 """
 
 
-def render_results_html(results: list[Result]) -> str:
+def render_results_html(results: list[Result], video_path: str = "") -> str:
     if not results:
         return _NO_MATCH_HTML
     cards = "".join(
-        render_result_card(r, generate_explanation(r), i)
+        render_result_card(r, generate_explanation(r), i, video_path)
         for i, r in enumerate(results)
     )
     count_label = f"{len(results)} result{'s' if len(results) != 1 else ''}"
@@ -700,12 +682,20 @@ QUERY_SYNTAX_WORDS: set[str] = {
     "than", "least", "exactly", "person", "people", "man", "woman", "child", "car",
 }
 
+# Split multi-word colors into individual tokens so "dark" is not flagged
+# when the parser correctly resolves "dark green" as a bigram.
+_COLOR_WORDS: set[str] = set()
+for _mc in list(COLOR_VOCAB) + list(COLOR_ALIASES.keys()):
+    for _w in _mc.split():
+        _COLOR_WORDS.add(_w)
+
 KNOWN_TOKENS: set[str] = (
     VOCABULARY_SET
     | set(SYNONYM_MAP.keys())
     | set(SYNONYM_MAP.values())
     | COLOR_VOCAB
     | set(COLOR_ALIASES.keys())
+    | _COLOR_WORDS          # individual words from multi-word colors (e.g. "dark", "light")
     | QUERY_SYNTAX_WORDS
 )
 
@@ -810,6 +800,7 @@ def process_query(
     query: str,
     collection_name: str | None = None,
     history: list[dict] | None = None,
+    video_path: str = "",
 ):
     """
     Gradio generator function. Yields (log_html, results_html, video_html, banner_html, history_html, history_list)
@@ -997,7 +988,7 @@ def process_query(
 
     # ── Step 6: Render ───────────────────────────────────────────────────────
     log.append(("pass", f"🎯 Returning {len(results)} result(s) — click a card to seek video"))
-    results_html = render_results_html(results)
+    results_html = render_results_html(results, video_path)
 
     entry = {
         "query_text": query,
@@ -1060,8 +1051,10 @@ def _generate_ingest_summary(collection_name: str, client) -> str:
         "stop sign": "🛑", "bench": "🪑",
     }
 
+    _TOP_N = 20
     rows_html = ""
-    for cls in sorted(tally, key=lambda c: -sum(tally[c].values())):
+    sorted_classes = sorted(tally, key=lambda c: -sum(tally[c].values()))
+    for cls in sorted_classes[:_TOP_N]:
         emoji = EMOJI.get(cls, "📦")
         total = sum(tally[cls].values())
         color_parts = ", ".join(
@@ -1069,14 +1062,20 @@ def _generate_ingest_summary(collection_name: str, client) -> str:
             for col, cnt in sorted(tally[cls].items(), key=lambda x: -x[1])
             if col != "unknown"
         )
-        color_str = f" — {color_parts}" if color_parts else ""
+        color_str = f" \u2014 {color_parts}" if color_parts else ""
         rows_html += (
             f'<div class="detected-item" style="'
             f'padding:4px 8px;border-radius:6px;margin:3px 0;'
             f'background:#1e293b;font-size:0.87rem;color:#e2e8f0;">'
             f'{emoji} <b>{cls}</b> <span style="color:#94a3b8;">'
-            f'×{total}{color_str}</span></div>\n'
+            f'\u00d7{total}{color_str}</span></div>\n'
         )
+
+    total_classes = len(sorted_classes)
+    footer = (
+        f'<div style="font-size:0.72rem;color:#475569;margin-top:4px;">'
+        f'Showing top {min(_TOP_N, total_classes)} of {total_classes} class types</div>'
+    )
 
     return (
         '<div class="detected-summary" style="'
@@ -1085,6 +1084,7 @@ def _generate_ingest_summary(collection_name: str, client) -> str:
         '<div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">'
         'Objects detected in this video:</div>\n'
         + rows_html
+        + footer
         + '</div>'
     )
 
@@ -1110,6 +1110,7 @@ def build_app() -> gr.Blocks:
         # ── Session state ───────────────────────────────────────────────────
         judge_collection = gr.State(value=None)
         query_history    = gr.State(value=[])
+        video_path_state = gr.State(value="")
 
         # ── Ingestion panel ──────────────────────────────────────────────────
         with gr.Accordion("📥 Live Judge-Video Ingestion", open=True):
@@ -1232,13 +1233,14 @@ def build_app() -> gr.Blocks:
         """)
 
         # ── Wire events ──────────────────────────────────────────────────────
-        search_inputs  = [query_box, judge_collection, query_history]
+        search_inputs  = [query_box, judge_collection, query_history, video_path_state]
         search_outputs = [log_output, results_output, video_output, vocab_banner, history_panel, query_history]
 
         def _threaded_process_query(
             query: str,
             collection_name: str | None = None,
             history: list[dict] | None = None,
+            video_path: str | None = None,
         ):
             """
             Thread-safe wrapper: runs process_query() in a background thread,
@@ -1249,7 +1251,7 @@ def build_app() -> gr.Blocks:
 
             def _worker():
                 try:
-                    for update in process_query(query, collection_name, history):
+                    for update in process_query(query, collection_name, history, video_path):
                         q.put(update)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("process_query thread error: %s", exc)
@@ -1285,7 +1287,7 @@ def build_app() -> gr.Blocks:
             so future queries target it.
             """
             if file_obj is None:
-                yield "", 0, None, current_collection, "", ""
+                yield "", 0, None, current_collection, "", "", ""
                 return
 
             video_path = file_obj.name if hasattr(file_obj, "name") else str(file_obj)
@@ -1318,14 +1320,13 @@ def build_app() -> gr.Blocks:
                 if phase == "complete":
                     new_collection = stats.get("collection", new_collection)
                     log_lines.append("__FOCUS_QUERY__")        # JS: focus query input
-                    log_lines.append(f"__SET_VIDEO_PATH__:{video_path}")  # JS: set global path
                     summary_html = _generate_ingest_summary(new_collection, _QDRANT_CLIENT)
-                yield "\n".join(log_lines[-20:]), pct, stats, new_collection, video_path, summary_html
+                yield "\n".join(log_lines[-20:]), pct, stats, new_collection, video_path, summary_html, video_path
 
         upload_video.change(
             fn=_start_ingestion,
             inputs=[upload_video, judge_collection],
-            outputs=[ingest_log, ingest_progress, ingest_stats, judge_collection, current_video_path, ingest_summary],
+            outputs=[ingest_log, ingest_progress, ingest_stats, judge_collection, current_video_path, ingest_summary, video_path_state],
         )
 
     return demo
