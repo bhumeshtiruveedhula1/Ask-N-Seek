@@ -805,6 +805,7 @@ def process_query(
             "",
             render_history_html(history_list),
             history_list,
+            gr.update(choices=[], visible=False),
         )
         return
 
@@ -858,6 +859,7 @@ def process_query(
             banner_html,
             render_history_html(history_list),
             history_list,
+            gr.update(choices=[], visible=False),
         )
         return
 
@@ -925,6 +927,7 @@ def process_query(
             banner_html,
             render_history_html(history_list),
             history_list,
+            gr.update(),
         )
 
         # Run constraint-level diagnosis and replace static no-match panel
@@ -936,6 +939,7 @@ def process_query(
             banner_html,
             render_history_html(history_list),
             history_list,
+            gr.update(),
         )
         try:
             diag = run_diagnosis(
@@ -964,6 +968,7 @@ def process_query(
             banner_html,
             render_history_html(history_list),
             history_list,
+            gr.update(choices=[], visible=False),
         )
         return
 
