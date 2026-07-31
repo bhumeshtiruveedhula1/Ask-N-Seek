@@ -821,6 +821,7 @@ def process_query(
         banner_html,
         render_history_html(history_list),
         history_list,
+        gr.update(),
     )
 
     filter_dict = parse_query(query)
@@ -833,6 +834,7 @@ def process_query(
         banner_html,
         render_history_html(history_list),
         history_list,
+        gr.update(),
     )
 
     # ── No-match from parser ─────────────────────────────────────────────────
@@ -868,6 +870,7 @@ def process_query(
         banner_html,
         render_history_html(history_list),
         history_list,
+        gr.update(),
     )
 
     results = search_structured(filter_dict, _QDRANT_CLIENT, target_coll)
@@ -880,6 +883,7 @@ def process_query(
         banner_html,
         render_history_html(history_list),
         history_list,
+        gr.update(),
     )
 
     # ── Step 3: Rerank ───────────────────────────────────────────────────────
@@ -891,6 +895,7 @@ def process_query(
         banner_html,
         render_history_html(history_list),
         history_list,
+        gr.update(),
     )
 
     # ── Step 4: Group ────────────────────────────────────────────────────────
@@ -902,6 +907,7 @@ def process_query(
         banner_html,
         render_history_html(history_list),
         history_list,
+        gr.update(),
     )
 
     # ── Step 5: Threshold ────────────────────────────────────────────────────
@@ -972,6 +978,7 @@ def process_query(
         banner_html,
         render_history_html(history_list),
         history_list,
+        gr.update(),
     )
 
     # ── Step 6: Render ───────────────────────────────────────────────────────
@@ -987,6 +994,16 @@ def process_query(
     }
     history_list = [entry] + history_list
 
+    # Build picker choices: (display_label, encoded_value)
+    # Encoded value = "video_path:::timestamp" decoded by result_picker.change handler
+    _picker_choices = [
+        (
+            f"{i+1}. {r.video_id} @ {r.timestamp:.1f}s  [{_conf_label(r.confidence_score)}]",
+            f"{video_path}:::{r.timestamp}"
+        )
+        for i, r in enumerate(results)
+    ] if results else []
+
     yield (
         _log_html(log),
         results_html,
@@ -994,6 +1011,7 @@ def process_query(
         banner_html,
         render_history_html(history_list),
         history_list,
+        gr.update(choices=_picker_choices, value=None, visible=bool(_picker_choices)),
     )
 
 
@@ -1169,6 +1187,15 @@ def build_app() -> gr.Blocks:
                 gr.HTML('<div class="panel-label">Results</div>')
                 vocab_banner = gr.HTML("", elem_id="vocab-banner")
                 results_output = gr.HTML(_NO_RESULTS_HTML, elem_id="results-panel")
+                # Native Gradio dropdown for seek — no JS/Shadow DOM issues
+                result_picker = gr.Dropdown(
+                    label="▶ Jump to result (click to seek video)",
+                    choices=[],
+                    value=None,
+                    interactive=True,
+                    visible=False,
+                    elem_id="result-picker",
+                )
 
         # ── Video player ─────────────────────────────────────────────────────
         gr.HTML('<div class="panel-label" style="margin-top:16px;">Video Player</div>')
@@ -1222,7 +1249,7 @@ def build_app() -> gr.Blocks:
 
         # ── Wire events ──────────────────────────────────────────────────────
         search_inputs  = [query_box, judge_collection, query_history, video_path_state]
-        search_outputs = [log_output, results_output, video_output, vocab_banner, history_panel, query_history]
+        search_outputs = [log_output, results_output, video_output, vocab_banner, history_panel, query_history, result_picker]
 
         def _threaded_process_query(
             query: str,
@@ -1264,6 +1291,52 @@ def build_app() -> gr.Blocks:
             fn=_threaded_process_query,
             inputs=search_inputs,
             outputs=search_outputs,
+        )
+
+        # ── Result picker: native Gradio seek (no JS/Shadow DOM) ─────────────
+        def _on_result_picked(encoded_value: str) -> str:
+            """
+            Decode 'video_path:::timestamp' from dropdown selection.
+            Return updated video player HTML with the video seeking to timestamp.
+            This is a native Gradio event — no JavaScript required.
+            """
+            if not encoded_value or ":::" not in encoded_value:
+                return _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+            parts = encoded_value.split(":::", 1)
+            vpath = parts[0].strip()
+            try:
+                ts = float(parts[1].strip())
+            except (ValueError, IndexError):
+                ts = 0.0
+            if not vpath or vpath == "None":
+                return _VIDEO_PLAYER_WRAP.format(inner=_NO_VIDEO_HTML)
+            # Gradio serves uploaded files at /file=<absolute_path>
+            video_url = f"/file={vpath}"
+            inner_html = f"""
+                <div class="video-info-bar">
+                    <span class="vid-badge">&#x1F4F9; Video</span>
+                    <span class="time-badge">&#x23F1; {ts:.1f}s</span>
+                </div>
+                <video id="main-player" controls
+                       style="width:100%;border-radius:8px;background:#000;">
+                    <source src="{video_url}" type="video/mp4">
+                </video>
+                <script>
+                (function(){{
+                    var v = document.getElementById('main-player');
+                    if (!v) return;
+                    function seek(){{ v.currentTime = {ts}; }}
+                    v.addEventListener('loadedmetadata', seek);
+                    setTimeout(function(){{ if (v.readyState >= 1) seek(); }}, 300);
+                }})();
+                </script>
+            """
+            return _VIDEO_PLAYER_WRAP.format(inner=inner_html)
+
+        result_picker.change(
+            fn=_on_result_picked,
+            inputs=[result_picker],
+            outputs=[video_output],
         )
 
         # ── Ingestion event: auto-trigger on file drop ───────────────────
