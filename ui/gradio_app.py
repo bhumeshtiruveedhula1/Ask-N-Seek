@@ -1003,6 +1003,77 @@ def process_query(
 
 
 # ---------------------------------------------------------------------------
+# Detection summary helper
+# ---------------------------------------------------------------------------
+
+def _generate_ingest_summary(collection_name: str, client) -> str:
+    """
+    Scroll ALL points from the collection and build a class/color breakdown.
+    Returns styled HTML showing exactly what objects were detected in the video.
+    """
+    if not collection_name:
+        return ""
+    try:
+        points, _ = client.scroll(
+            collection_name=collection_name,
+            limit=10000,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+
+    if not points:
+        return ""
+
+    # Build: {class_name: {color: count}}
+    tally: dict[str, dict[str, int]] = {}
+    for pt in points:
+        p = pt.payload or {}
+        cls   = p.get("class_name", "unknown")
+        color = p.get("color") or "unknown"
+        tally.setdefault(cls, {}).setdefault(color, 0)
+        tally[cls][color] += 1
+
+    # Class → emoji map (common COCO classes)
+    EMOJI = {
+        "person": "🚶", "car": "🚗", "truck": "🚚", "bus": "🚌",
+        "bicycle": "🚲", "motorcycle": "🏍", "dog": "🐕", "cat": "🐈",
+        "chair": "🪑", "bottle": "🍶", "laptop": "💻", "cell phone": "📱",
+        "backpack": "🎒", "umbrella": "☂", "traffic light": "🚦",
+        "stop sign": "🛑", "bench": "🪑",
+    }
+
+    rows_html = ""
+    for cls in sorted(tally, key=lambda c: -sum(tally[c].values())):
+        emoji = EMOJI.get(cls, "📦")
+        total = sum(tally[cls].values())
+        color_parts = ", ".join(
+            f"{col}({cnt})"
+            for col, cnt in sorted(tally[cls].items(), key=lambda x: -x[1])
+            if col != "unknown"
+        )
+        color_str = f" — {color_parts}" if color_parts else ""
+        rows_html += (
+            f'<div class="detected-item" style="'
+            f'padding:4px 8px;border-radius:6px;margin:3px 0;'
+            f'background:#1e293b;font-size:0.87rem;color:#e2e8f0;">'
+            f'{emoji} <b>{cls}</b> <span style="color:#94a3b8;">'
+            f'×{total}{color_str}</span></div>\n'
+        )
+
+    return (
+        '<div class="detected-summary" style="'
+        'max-height:220px;overflow-y:auto;padding:8px;'
+        'border-radius:8px;border:1px solid #334155;background:#0f172a;">'
+        '<div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">'
+        'Objects detected in this video:</div>\n'
+        + rows_html
+        + '</div>'
+    )
+
+
+# ---------------------------------------------------------------------------
 # Build the Gradio app
 # ---------------------------------------------------------------------------
 
@@ -1050,6 +1121,11 @@ def build_app() -> gr.Blocks:
                     ingest_stats = gr.JSON(
                         label="Stats",
                         elem_id="ingest-stats",
+                    )
+                    ingest_summary = gr.HTML(
+                        value="",
+                        label="Detected Objects",
+                        elem_id="ingest-summary",
                     )
 
         gr.HTML('<hr style="border-color:#1e293b;margin:8px 0;">')
@@ -1193,7 +1269,7 @@ def build_app() -> gr.Blocks:
             so future queries target it.
             """
             if file_obj is None:
-                yield "", 0, None, current_collection
+                yield "", 0, None, current_collection, "", ""
                 return
 
             video_path = file_obj.name if hasattr(file_obj, "name") else str(file_obj)
@@ -1213,6 +1289,7 @@ def build_app() -> gr.Blocks:
             threading.Thread(target=_worker, daemon=True).start()
 
             new_collection = current_collection
+            summary_html   = ""
             while True:
                 upd = iq.get()
                 if upd is None:
@@ -1225,12 +1302,13 @@ def build_app() -> gr.Blocks:
                 if phase == "complete":
                     new_collection = stats.get("collection", new_collection)
                     log_lines.append("__FOCUS_QUERY__")  # Fix 3: triggers JS auto-focus
-                yield "\n".join(log_lines[-20:]), pct, stats, new_collection, video_path
+                    summary_html = _generate_ingest_summary(new_collection, _QDRANT_CLIENT)
+                yield "\n".join(log_lines[-20:]), pct, stats, new_collection, video_path, summary_html
 
         upload_video.change(
             fn=_start_ingestion,
             inputs=[upload_video, judge_collection],
-            outputs=[ingest_log, ingest_progress, ingest_stats, judge_collection, current_video_path],
+            outputs=[ingest_log, ingest_progress, ingest_stats, judge_collection, current_video_path, ingest_summary],
         )
 
     return demo
