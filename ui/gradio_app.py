@@ -425,17 +425,24 @@ function _updateVideoPlayer(videoId, timestamp) {
     const container = document.getElementById('video-player-inner');
     if (!container) return;
 
-    // FIX 2: Read the actual uploaded video path from hidden Gradio textbox.
-    // Gradio serves temp uploads at /file=<absolute_path>.
-    const pathEl = document.querySelector('#current-video-path textarea') ||
-                   document.querySelector('#current-video-path input');
-    const uploadedPath = pathEl ? pathEl.value.trim() : '';
+    // Primary: JS global set by inline <script> injected into ingest-log on complete
+    // Fallback: read hidden Gradio textbox (may lag by one Gradio re-render cycle)
+    let uploadedPath = window._ODYSSEUS_VIDEO_PATH || '';
+    if (!uploadedPath) {
+        // Gradio 6 wraps textbox in a div; try both textarea and input selectors
+        const pathEl = document.querySelector('#current-video-path textarea') ||
+                       document.querySelector('#current-video-path input') ||
+                       document.querySelector('[id*="current-video-path"] textarea') ||
+                       document.querySelector('[id*="current-video-path"] input');
+        uploadedPath = pathEl ? pathEl.value.trim() : '';
+    }
 
     let videoUrl;
     if (uploadedPath) {
-        videoUrl = '/file=' + encodeURIComponent(uploadedPath);
+        // CRITICAL: do NOT encodeURIComponent — Gradio's /file= route uses :path
+        // which accepts raw paths. Encoding backslashes (%5C) breaks Windows paths.
+        videoUrl = '/file=' + uploadedPath;
     } else {
-        // Fallback to template (pre-indexed video served from known path)
         const rawTpl = window._ODYSSEUS_VIDEO_TPL || '';
         videoUrl = rawTpl ? rawTpl.replace('{video_id}', videoId) : '';
     }
@@ -458,7 +465,7 @@ function _updateVideoPlayer(videoId, timestamp) {
     if (vid) {
         vid.addEventListener('loadedmetadata', () => { vid.currentTime = timestamp; });
         // Fallback for cached metadata
-        setTimeout(() => { if (!isNaN(vid.duration)) vid.currentTime = timestamp; }, 150);
+        setTimeout(() => { if (!isNaN(vid.duration)) vid.currentTime = timestamp; }, 200);
     }
 }
 
@@ -470,18 +477,27 @@ function _notifyGradio(elemId, value) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-// FIX 3: Auto-focus query box when ingestion log contains __FOCUS_QUERY__ marker.
+// FIX 3+: Poll ingest log for control markers injected by Python on complete.
 setInterval(function() {
     const logEl = document.querySelector('#ingest-log textarea') ||
                   document.querySelector('#ingest-log input');
-    if (logEl && logEl.value && logEl.value.includes('__FOCUS_QUERY__')) {
+    if (!logEl || !logEl.value) return;
+
+    // Auto-focus query box
+    if (logEl.value.includes('__FOCUS_QUERY__')) {
         const inputEl = document.querySelector('#query-input textarea') ||
                         document.querySelector('#query-input input');
         if (inputEl) {
             inputEl.focus();
-            // Clear the marker so we don't refocus on every interval tick
             logEl.value = logEl.value.replace('__FOCUS_QUERY__', '');
         }
+    }
+
+    // Set video path global — avoids unreliable Gradio 6 DOM reading
+    const pathMatch = logEl.value.match(/__SET_VIDEO_PATH__:([^\n]+)/);
+    if (pathMatch) {
+        window._ODYSSEUS_VIDEO_PATH = pathMatch[1].trim();
+        logEl.value = logEl.value.replace(/__SET_VIDEO_PATH__:[^\n]+/, '');
     }
 }, 500);
 
@@ -1301,7 +1317,8 @@ def build_app() -> gr.Blocks:
                 log_lines.append(f"[{phase}] {msg}")
                 if phase == "complete":
                     new_collection = stats.get("collection", new_collection)
-                    log_lines.append("__FOCUS_QUERY__")  # Fix 3: triggers JS auto-focus
+                    log_lines.append("__FOCUS_QUERY__")        # JS: focus query input
+                    log_lines.append(f"__SET_VIDEO_PATH__:{video_path}")  # JS: set global path
                     summary_html = _generate_ingest_summary(new_collection, _QDRANT_CLIENT)
                 yield "\n".join(log_lines[-20:]), pct, stats, new_collection, video_path, summary_html
 
