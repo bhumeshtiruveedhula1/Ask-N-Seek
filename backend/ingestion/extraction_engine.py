@@ -138,7 +138,7 @@ def _detect_scene_boundaries(video_path: str) -> list[tuple[float, float]]:
 
     Uses the open_video / SceneManager API (scenedetect ≥ 0.6).
     """
-    video = open_video(video_path, framerate=None, downscale_factor=2)
+    video = open_video(video_path)
     manager = SceneManager()
     manager.add_detector(ContentDetector(threshold=SCENE_DETECT_THRESHOLD))
     manager.detect_scenes(video=video, show_progress=False)
