@@ -1,15 +1,12 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowRight, Play, Clock } from "lucide-react";
+import { ArrowRight, Play, Clock, ChevronDown, RotateCcw } from "lucide-react";
 import type { SearchResult, QueryHistoryItem, ScoreBreakdown } from "../types";
 import { useScenarios } from "../hooks/useApi";
 
-// ── SmartScoreBars ──────────────────────────────────────────────────────────
-// Renders a 4-bar score breakdown for a result card.
-// Shown on hover inside the result card overlay.
-// Hidden gracefully when score_breakdown is absent (legacy data).
+// ── SmartScoreBars ────────────────────────────────────────────────────────────
 function SmartScoreBars({ sb }: { sb: ScoreBreakdown }) {
   const MONO: React.CSSProperties = {
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
@@ -18,7 +15,7 @@ function SmartScoreBars({ sb }: { sb: ScoreBreakdown }) {
   };
   const BAR_LEN = 20;
   const FILLED = "#c4b8a5";
-  const EMPTY  = "#8a8275";
+  const EMPTY = "#8a8275";
 
   const cats: [string, number, number, string | undefined][] = [
     ["Object",   sb.object_score,   40, sb.details.object],
@@ -34,8 +31,7 @@ function SmartScoreBars({ sb }: { sb: ScoreBreakdown }) {
       </div>
       {cats.map(([label, score, max, detail]) => {
         const filled = max > 0 ? Math.round((score / max) * BAR_LEN) : 0;
-        const empty  = BAR_LEN - filled;
-        const bar    = "█".repeat(filled) + "░".repeat(empty);
+        const empty = BAR_LEN - filled;
         return (
           <div key={label} title={detail || ""} style={{ ...MONO, display: "flex", gap: 6, cursor: "help" }}>
             <span style={{ color: EMPTY, width: "4.5rem", flexShrink: 0 }}>{label}</span>
@@ -54,14 +50,230 @@ function SmartScoreBars({ sb }: { sb: ScoreBreakdown }) {
   );
 }
 
+// ── ConfBadge ─────────────────────────────────────────────────────────────────
+function ConfBadge({ score }: { score: number }) {
+  const isHigh = score >= 0.75;
+  const isMed = score >= 0.50;
+  const label = isHigh ? "HIGH" : isMed ? "MED" : "LOW";
+  const color = isHigh ? "#10b981" : isMed ? "#f59e0b" : "#ef4444";
+  const bg    = isHigh ? "rgba(16,185,129,0.12)" : isMed ? "rgba(245,158,11,0.12)" : "rgba(239,68,68,0.12)";
+  return (
+    <span style={{
+      background: bg, color, border: `1px solid ${color}`,
+      padding: "2px 8px", borderRadius: 20,
+      fontFamily: "'JetBrains Mono', monospace", fontSize: "0.68rem",
+      fontWeight: 700, letterSpacing: "0.4px", textTransform: "uppercase",
+    }}>
+      {label} {score.toFixed(2)}
+    </span>
+  );
+}
+
+// ── ProcessingLog ─────────────────────────────────────────────────────────────
+// Mirrors the Gradio log-container with colored step lines
+function ProcessingLog({ steps }: { steps: Array<{ cls: string; text: string }> }) {
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [steps]);
+
+  const clsColor: Record<string, string> = {
+    pass: "#10b981",
+    fail: "#ef4444",
+    info: "#818cf8",
+    warn: "#f59e0b",
+    muted: "#475569",
+  };
+
+  return (
+    <div style={{
+      background: "#080812",
+      border: "1px solid #1a1a2e",
+      borderRadius: 10,
+      padding: "14px 16px",
+      height: 300,
+      overflowY: "auto",
+      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+      fontSize: "0.78rem",
+      lineHeight: 1.8,
+      color: "#94a3b8",
+    }}>
+      {steps.length === 0 && (
+        <span style={{ color: "#475569" }}>⌛ Waiting for a query…</span>
+      )}
+      {steps.map((s, i) => (
+        <div key={i} style={{ color: clsColor[s.cls] ?? "#94a3b8", padding: "1px 0" }}
+          dangerouslySetInnerHTML={{ __html: s.text }} />
+      ))}
+      <div ref={endRef} />
+    </div>
+  );
+}
+
+// ── IngestStats ───────────────────────────────────────────────────────────────
+// Renders the Stats JSON panel (scenes / keyframes / objects / collection)
+function IngestStats({ stats }: { stats: Record<string, unknown> | null }) {
+  if (!stats) return null;
+  const entries = Object.entries(stats);
+  return (
+    <div style={{
+      background: "#0c0c1e",
+      border: "1px solid #1a1a35",
+      borderRadius: 8,
+      padding: "10px 14px",
+      fontFamily: "'JetBrains Mono', monospace",
+      fontSize: "0.75rem",
+      color: "#94a3b8",
+      marginTop: 12,
+    }}>
+      <div style={{ color: "#475569", fontSize: "0.65rem", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+        Stats
+      </div>
+      {entries.map(([k, v]) => (
+        <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+          <span style={{ color: "#64748b" }}>{k}</span>
+          <span style={{ color: "#c7d2fe" }}>{String(v)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── DetectedObjectsSummary ────────────────────────────────────────────────────
+// Mirrors the Gradio ingest_summary HTML panel
+const OBJ_EMOJI: Record<string, string> = {
+  person: "🚶", car: "🚗", truck: "🚚", bus: "🚌", bicycle: "🚲",
+  motorcycle: "🏍", dog: "🐕", cat: "🐈", chair: "🪑", bottle: "🍶",
+  laptop: "💻", "cell phone": "📱", backpack: "🎒", umbrella: "☂",
+  "traffic light": "🚦", "stop sign": "🛑", bench: "🪑",
+};
+
+function DetectedObjectsSummary({ tally }: { tally: Record<string, Record<string, number>> | null }) {
+  if (!tally || Object.keys(tally).length === 0) return null;
+  const sorted = Object.entries(tally)
+    .sort(([, a], [, b]) => Object.values(b).reduce((s, v) => s + v, 0) - Object.values(a).reduce((s, v) => s + v, 0))
+    .slice(0, 20);
+
+  return (
+    <div style={{
+      maxHeight: 200, overflowY: "auto",
+      background: "#0f172a",
+      border: "1px solid #334155",
+      borderRadius: 8,
+      padding: "8px 10px",
+      marginTop: 12,
+    }}>
+      <div style={{ fontSize: "0.65rem", color: "#64748b", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        Objects detected in this video
+      </div>
+      {sorted.map(([cls, colorMap]) => {
+        const total = Object.values(colorMap).reduce((s, v) => s + v, 0);
+        const colorParts = Object.entries(colorMap)
+          .filter(([c]) => c !== "unknown")
+          .sort(([, a], [, b]) => b - a)
+          .map(([c, n]) => `${c}(${n})`)
+          .join(", ");
+        return (
+          <div key={cls} style={{
+            padding: "3px 8px", borderRadius: 6, margin: "2px 0",
+            background: "#1e293b", fontSize: "0.82rem", color: "#e2e8f0",
+          }}>
+            {OBJ_EMOJI[cls] ?? "📦"} <b>{cls}</b>{" "}
+            <span style={{ color: "#94a3b8" }}>×{total}{colorParts ? ` — ${colorParts}` : ""}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── ResultPickerDropdown ──────────────────────────────────────────────────────
+// Mirrors Gradio result_picker: "Jump to result (click to seek video)"
+interface PickerOption { label: string; value: string; }
+interface ResultPickerProps {
+  options: PickerOption[];
+  onSelect: (videoId: string, timestamp: number) => void;
+}
+function ResultPickerDropdown({ options, onSelect }: ResultPickerProps) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  if (options.length === 0) return null;
+
+  const handlePick = (opt: PickerOption) => {
+    setSelected(opt.label);
+    setOpen(false);
+    const parts = opt.value.split(":::");
+    const vid = parts[0]?.trim() || "";
+    const ts = parseFloat(parts[1]?.trim() || "0");
+    onSelect(vid, isNaN(ts) ? 0 : ts);
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative", marginTop: 16 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: "100%", textAlign: "left",
+          background: "#0c0c1e", border: "1px solid #1e1e3f",
+          borderRadius: 8, padding: "10px 14px",
+          color: selected ? "#c7d2fe" : "#475569",
+          fontFamily: "'JetBrains Mono', monospace", fontSize: "0.82rem",
+          cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center",
+        }}
+      >
+        <span>{selected ?? "▶ Jump to result (click to seek video)"}</span>
+        <ChevronDown size={16} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+            style={{
+              position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50,
+              background: "#0c0c1e", border: "1px solid #1e1e3f", borderRadius: 8,
+              overflow: "hidden", maxHeight: 260, overflowY: "auto",
+            }}
+          >
+            {options.map(opt => (
+              <button key={opt.value} onClick={() => handlePick(opt)}
+                style={{
+                  width: "100%", textAlign: "left", display: "block",
+                  padding: "9px 14px", background: "transparent",
+                  border: "none", borderBottom: "1px solid #1a1a2e",
+                  color: "#94a3b8", fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: "0.78rem", cursor: "pointer",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = "#1a1a3e")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Props interface ───────────────────────────────────────────────────────────
 interface Props {
   onIngestComplete: (collection: string) => void;
   ingestStatus: "idle" | "running" | "complete" | "error";
   ingestProgress: number;
   ingestLogs: string[];
+  ingestStats: Record<string, unknown> | null;
+  ingestObjectTally: Record<string, Record<string, number>> | null;
   startIngest: (path: string) => Promise<string | null>;
   onSearch: (query: string) => void;
   queryLoading: boolean;
+  processLog: Array<{ cls: string; text: string }>;
   vocabWarnings: Array<{ token: string; suggestion?: string }>;
   disabled?: boolean;
   results: SearchResult[];
@@ -74,15 +286,26 @@ interface Props {
   onHistoryReplay: (query: string) => void;
 }
 
+// ── Main component ────────────────────────────────────────────────────────────
 export default function InteractiveDemo({
-  onIngestComplete, ingestStatus, ingestProgress, ingestLogs, startIngest,
-  onSearch, queryLoading, vocabWarnings, disabled, results, diagnosis,
+  onIngestComplete, ingestStatus, ingestProgress, ingestLogs, ingestStats,
+  ingestObjectTally, startIngest,
+  onSearch, queryLoading, processLog, vocabWarnings, disabled, results, diagnosis,
   showDiagnosis, currentQuery, selectedVideo, onResultSelect, history, onHistoryReplay,
 }: Props) {
   const [query, setQuery] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const { scenarios } = useScenarios();
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Seek video to timestamp when selectedVideo changes
+  useEffect(() => {
+    if (videoRef.current && selectedVideo) {
+      videoRef.current.currentTime = selectedVideo.timestamp;
+      videoRef.current.play().catch(() => {/* autoplay may be blocked */});
+    }
+  }, [selectedVideo]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); }, []);
   const handleDragLeave = useCallback(() => setIsDragOver(false), []);
@@ -111,6 +334,15 @@ export default function InteractiveDemo({
     if (query.trim() && !queryLoading) onSearch(query.trim());
   };
 
+  // Build result picker options from current results
+  const pickerOptions: Array<{ label: string; value: string }> = results.map((r, i) => {
+    const conf = r.confidence_score >= 0.75 ? "HIGH" : r.confidence_score >= 0.50 ? "MED" : "LOW";
+    return {
+      label: `${i + 1}. ${r.video_id} @ ${r.timestamp.toFixed(1)}s  [${conf} ${r.confidence_score.toFixed(2)}]`,
+      value: `${r.video_id}:::${r.timestamp}`,
+    };
+  });
+
   return (
     <section id="demo" className="py-32 md:py-48 px-6 md:px-12 border-t border-white/5">
       <div className="max-w-[1400px] mx-auto">
@@ -120,8 +352,8 @@ export default function InteractiveDemo({
           Upload a video. Ask a question. Watch the system prove every match.
         </p>
 
-        {/* Upload Zone */}
-        <div className="mb-24">
+        {/* ── Upload Zone ─────────────────────────────────────────────── */}
+        <div className="mb-16">
           <div
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -153,8 +385,13 @@ export default function InteractiveDemo({
                   <div className="h-px bg-white/10 relative">
                     <motion.div className="absolute inset-y-0 left-0 bg-sand" animate={{ width: `${ingestProgress}%` }} transition={{ duration: 0.3 }} />
                   </div>
-                  <div className="mt-4 space-y-1">
-                    {ingestLogs.slice(-3).map((l, i) => <p key={i} className="sd-mono">{l}</p>)}
+                  {/* Full scrollable log — all lines, not just last 3 */}
+                  <div style={{
+                    marginTop: 16, maxHeight: 120, overflowY: "auto",
+                    fontFamily: "'JetBrains Mono', monospace", fontSize: "0.72rem",
+                    color: "#94a3b8", lineHeight: 1.7,
+                  }}>
+                    {ingestLogs.map((l, i) => <div key={i}>{l}</div>)}
                   </div>
                 </motion.div>
               )}
@@ -166,10 +403,18 @@ export default function InteractiveDemo({
               )}
             </AnimatePresence>
           </div>
+
+          {/* Stats JSON + Detected Objects Summary — shown after ingestion */}
+          {(ingestStats || ingestObjectTally) && ingestStatus !== "idle" && (
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+              <IngestStats stats={ingestStats} />
+              <DetectedObjectsSummary tally={ingestObjectTally} />
+            </motion.div>
+          )}
         </div>
 
-        {/* Query */}
-        <div className="mb-24">
+        {/* ── Query ───────────────────────────────────────────────────── */}
+        <div className="mb-16">
           <span className="sd-label block mb-8">Query</span>
           <form onSubmit={handleSubmit}>
             <div className="relative">
@@ -179,18 +424,22 @@ export default function InteractiveDemo({
                 className="w-full bg-transparent border-0 border-b border-white/10 focus:border-sand pb-4 pt-2 font-serif text-2xl md:text-4xl text-cream-100 placeholder:text-cream-800 outline-none transition-colors duration-500 pr-16" />
               <button type="submit" disabled={!query.trim() || queryLoading || disabled}
                 className="absolute right-0 bottom-4 text-cream-700 hover:text-sand disabled:opacity-30 transition-colors">
-                <ArrowRight className="w-8 h-8" />
+                {queryLoading
+                  ? <span className="sd-mono text-sm animate-pulse">Searching…</span>
+                  : <ArrowRight className="w-8 h-8" />}
               </button>
             </div>
           </form>
 
+          {/* Vocab warnings */}
           <AnimatePresence>
             {vocabWarnings.length > 0 && (
-              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="mt-6 border-l border-sand pl-6">
+              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
+                style={{ marginTop: 12, background: "#451a03", border: "1px solid #f59e0b", color: "#fef3c7", padding: "10px 14px", borderRadius: 8, fontSize: "0.88rem" }}>
                 {vocabWarnings.map((w, i) => (
-                  <p key={i} className="sd-mono text-cream-500">
-                    {w.suggestion ? `"${w.token}" → did you mean "${w.suggestion}"?` : `"${w.token}" not recognized.`}
-                  </p>
+                  <div key={i}>
+                    {w.suggestion ? `⚠️ "${w.token}" — did you mean "${w.suggestion}"?` : `⚠️ "${w.token}" not recognized — try a different term.`}
+                  </div>
                 ))}
               </motion.div>
             )}
@@ -201,33 +450,20 @@ export default function InteractiveDemo({
             {scenarios.map((s) => (
               <button
                 key={s.id}
-                onClick={() => {
-                  setQuery(s.query);
-                  onSearch(s.query);
-                }}
+                onClick={() => { setQuery(s.query); onSearch(s.query); }}
                 disabled={disabled || queryLoading}
                 title={s.query}
                 className="text-xs px-3 py-1.5 border transition-all duration-300 disabled:opacity-30"
-                style={{
-                  fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                  borderColor: "rgba(255,255,255,0.1)",
-                  color: "#8a8275",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#c4b8a5";
-                  (e.currentTarget as HTMLButtonElement).style.color = "#c4b8a5";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.1)";
-                  (e.currentTarget as HTMLButtonElement).style.color = "#8a8275";
-                }}
+                style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace", borderColor: "rgba(255,255,255,0.1)", color: "#8a8275" }}
+                onMouseEnter={e => { (e.currentTarget).style.borderColor = "#c4b8a5"; (e.currentTarget).style.color = "#c4b8a5"; }}
+                onMouseLeave={e => { (e.currentTarget).style.borderColor = "rgba(255,255,255,0.1)"; (e.currentTarget).style.color = "#8a8275"; }}
               >
                 {s.label}
               </button>
             ))}
           </div>
 
-          {/* Quick-query chips (existing) */}
+          {/* Quick-query chips */}
           <div className="flex flex-wrap gap-6 mt-4">
             {["person in red", "person without helmet", "two people", "person left of car", "car in dark blue"].map((s) => (
               <button key={s} onClick={() => { setQuery(s); onSearch(s); }} disabled={disabled || queryLoading}
@@ -238,75 +474,152 @@ export default function InteractiveDemo({
           </div>
         </div>
 
-        {/* Results */}
+        {/* ── Processing Log + Results (2-column layout like Gradio) ─── */}
         <AnimatePresence>
-          {results.length > 0 && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mb-24">
-              <div className="flex items-center justify-between mb-8">
-                <span className="sd-label">{results.length} Match{results.length !== 1 ? "es" : ""} for "{currentQuery}"</span>
-                <span className="sd-mono">Scroll →</span>
+          {(processLog.length > 0 || results.length > 0 || queryLoading) && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="mb-16 grid grid-cols-1 md:grid-cols-[1fr_2fr] gap-8">
+
+              {/* LEFT: Processing Log */}
+              <div>
+                <span className="sd-label block mb-4">Processing Log</span>
+                <ProcessingLog steps={processLog} />
               </div>
-              <div className="flex gap-4 overflow-x-auto pb-4" style={{ scrollSnapType: "x mandatory", scrollbarWidth: "none" }}>
-                {results.map((r, i) => (
-                  <button key={i} onClick={() => onResultSelect(r.video_id, r.timestamp)}
-                    className="flex-shrink-0 w-[320px] md:w-[400px] aspect-video bg-neutral-950 border border-white/5 hover:border-white/15 transition-all duration-500 text-left relative overflow-hidden group"
-                    style={{ scrollSnapAlign: "start" }}>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <Play className="w-8 h-8 text-cream-800 group-hover:text-sand transition-colors" />
-                    </div>
-                    <div className="absolute inset-0 opacity-20 group-hover:opacity-40 transition-opacity">
-                      {r.matched_objects.slice(0, 3).map((obj, j) => {
-                        const bbox = obj.bbox || [0.1 + j * 0.25, 0.2, 0.35 + j * 0.25, 0.6];
-                        return (
-                          <div key={j} className="absolute border border-sand/50" style={{
-                            left: `${bbox[0] * 100}%`, top: `${bbox[1] * 100}%`,
-                            width: `${(bbox[2] - bbox[0]) * 100}%`, height: `${(bbox[3] - bbox[1]) * 100}%`
-                          }} />
-                        );
-                      })}
-                    </div>
-                    <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent">
-                      <div className="flex items-end justify-between">
-                        <div>
-                          <p className="font-serif text-sm text-cream-100">{r.video_id}</p>
-                          <p className="sd-mono mt-1">{r.timestamp.toFixed(1)}s · {r.matched_objects.length} objects</p>
+
+              {/* RIGHT: Result Cards + Picker */}
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <span className="sd-label">
+                    {results.length > 0
+                      ? `${results.length} Result${results.length !== 1 ? "s" : ""} for "${currentQuery}"`
+                      : queryLoading ? "Processing…" : "Results"}
+                  </span>
+                </div>
+
+                {/* Scrollable result cards — vertical list like Gradio, not horizontal strip */}
+                {results.length > 0 && (
+                  <div style={{ maxHeight: 460, overflowY: "auto", paddingRight: 4 }}>
+                    {results.map((r, i) => {
+                      const bbox = r.matched_objects[0]?.bbox;
+                      return (
+                        <div key={i} style={{
+                          background: "linear-gradient(135deg, #0d0d20 0%, #11112a 100%)",
+                          border: "1px solid #1e1e3f", borderRadius: 12,
+                          padding: 14, marginBottom: 12,
+                        }}>
+                          {/* Header */}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                            <span style={{ fontWeight: 600, fontSize: "0.88rem", color: "#c7d2fe" }}>📹 {r.video_id}</span>
+                            <ConfBadge score={r.confidence_score} />
+                          </div>
+
+                          {/* Meta */}
+                          <div style={{ fontSize: "0.75rem", color: "#64748b", marginBottom: 8 }}>
+                            ⏱ {r.timestamp.toFixed(1)}s &nbsp;·&nbsp; Scene {r.scene_id} &nbsp;·&nbsp; {r.matched_objects.length} object(s)
+                          </div>
+
+                          {/* Thumbnail placeholder with bbox overlay */}
+                          <div style={{
+                            width: "100%", height: 88,
+                            background: "linear-gradient(135deg, #0f0f20, #161630)",
+                            borderRadius: 8, border: "1px dashed #1e1e3f",
+                            position: "relative", overflow: "hidden", marginBottom: 10,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}>
+                            <span style={{ fontSize: 28, opacity: 0.6 }}>🎬</span>
+                            {r.matched_objects.slice(0, 3).map((obj, j) => {
+                              const b = obj.bbox || [0.1 + j * 0.25, 0.2, 0.35 + j * 0.25, 0.6];
+                              return (
+                                <div key={j} style={{
+                                  position: "absolute",
+                                  left: `${b[0] * 100}%`, top: `${b[1] * 100}%`,
+                                  width: `${Math.max((b[2] - b[0]) * 100, 5)}%`,
+                                  height: `${Math.max((b[3] - b[1]) * 100, 5)}%`,
+                                  border: "2px solid rgba(99,102,241,0.7)",
+                                  borderRadius: 3, background: "rgba(99,102,241,0.08)",
+                                }} />
+                              );
+                            })}
+                          </div>
+
+                          {/* BBox text tags (like Gradio) */}
+                          {r.matched_objects.slice(0, 3).map((obj, j) => {
+                            if (!obj.bbox) return null;
+                            const bStr = obj.bbox.map(v => v.toFixed(2)).join(", ");
+                            return (
+                              <div key={j} style={{
+                                fontFamily: "'JetBrains Mono', monospace", fontSize: "0.7rem",
+                                color: "#94a3b8", background: "rgba(0,0,0,0.4)",
+                                padding: "3px 8px", borderRadius: 4, margin: "2px 0",
+                                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                              }}>
+                                {obj.class_name}/{obj.color ?? "?"}: [{bStr}]
+                              </div>
+                            );
+                          })}
+
+                          {/* Explanation */}
+                          {r.explanation && (
+                            <p style={{ fontSize: "0.78rem", color: "#cbd5e1", fontStyle: "italic", lineHeight: 1.5, marginTop: 6, paddingTop: 6, borderTop: "1px solid #1e1e3f" }}>
+                              💡 {r.explanation}
+                            </p>
+                          )}
+
+                          {/* Smart Score Bars */}
+                          {r.score_breakdown && <SmartScoreBars sb={r.score_breakdown} />}
+
+                          {/* Click-to-seek hint */}
+                          <button
+                            onClick={() => onResultSelect(r.video_id, r.timestamp)}
+                            style={{
+                              marginTop: 8, width: "100%", textAlign: "right",
+                              color: "#64748b", fontSize: "0.68rem", background: "none",
+                              border: "none", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+                            }}
+                          >
+                            🔽 Click to seek video
+                          </button>
                         </div>
-                        <span className={`text-xs font-mono px-2 py-1 border ${r.confidence_score >= 0.75 ? "border-sand text-sand" : "border-cream-800 text-cream-700"}`}>
-                          {(r.confidence_score * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                    </div>
-                    <div className="absolute top-0 left-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity bg-black/70">
-                      <p className="text-cream-300 text-xs leading-relaxed">{r.explanation}</p>
-                      {r.score_breakdown && <SmartScoreBars sb={r.score_breakdown} />}
-                    </div>
-                  </button>
-                ))}
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Result Picker Dropdown */}
+                {results.length > 0 && (
+                  <ResultPickerDropdown options={pickerOptions} onSelect={onResultSelect} />
+                )}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Video Player */}
+        {/* ── Video Player ─────────────────────────────────────────────── */}
         <AnimatePresence>
           {selectedVideo && (
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mb-24">
-              <span className="sd-label block mb-4">Playback</span>
-              <div className="aspect-video bg-neutral-950 border border-white/5">
-                <video src={selectedVideo.path} className="w-full h-full object-contain" controls autoPlay />
-              </div>
-              <div className="flex items-center gap-4 mt-4">
-                <Clock className="w-4 h-4 text-cream-800" />
-                <span className="sd-mono">{selectedVideo.timestamp.toFixed(1)}s</span>
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mb-16">
+              <span className="sd-label block mb-4">Video Player</span>
+              <div style={{ background: "#08080f", border: "1px solid #1a1a2e", borderRadius: 12, padding: 16 }}>
+                <video
+                  ref={videoRef}
+                  src={selectedVideo.path}
+                  className="w-full"
+                  style={{ borderRadius: 8, background: "#000", maxHeight: 480 }}
+                  controls
+                />
+                <div className="flex items-center gap-4 mt-3">
+                  <Clock className="w-4 h-4 text-cream-800" />
+                  <span className="sd-mono">Seeking to {selectedVideo.timestamp.toFixed(1)}s</span>
+                </div>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Diagnosis */}
+        {/* No-match Diagnosis */}
         <AnimatePresence>
           {showDiagnosis && diagnosis && (
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mb-24 border-l border-white/10 pl-8 py-4">
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mb-16 border-l border-white/10 pl-8 py-4">
               <span className="sd-label block mb-4">Diagnosis</span>
               <h3 className="font-serif text-2xl text-cream-100 mb-4">No confident match.</h3>
               <p className="text-cream-600 mb-8 max-w-2xl">We found related objects, but nothing satisfied all constraints together.</p>
@@ -331,24 +644,39 @@ export default function InteractiveDemo({
           )}
         </AnimatePresence>
 
-        {/* History */}
+        {/* ── Query History ──────────────────────────────────────────── */}
         {history.length > 0 && (
           <div className="border-t border-white/5 pt-12">
-            <span className="sd-label block mb-6">Session Log</span>
-            <div className="space-y-0">
+            <span className="sd-label block mb-6">Session Query History</span>
+            <div style={{ maxHeight: 280, overflowY: "auto", paddingRight: 4 }}>
               {history.map((item, idx) => (
-                <button key={idx} onClick={() => onHistoryReplay(item.query_text)}
-                  className="w-full flex items-center justify-between py-3 border-b border-white/5 hover:border-white/10 transition-colors group text-left">
-                  <div className="flex items-center gap-6">
-                    <span className="sd-mono w-8">{String(history.length - idx).padStart(2, "0")}</span>
-                    <span className="text-cream-500 group-hover:text-cream-100 transition-colors text-sm">{item.query_text}</span>
+                <div key={idx} style={{
+                  background: "#0f172a", border: "1px solid #1e293b", borderRadius: 6,
+                  padding: "8px 12px", marginBottom: 6, fontSize: "0.85rem", color: "#cbd5e1",
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                }}>
+                  <div>
+                    <b style={{ color: "#f8fafc" }}>Q: {item.query_text}</b>
+                    <span style={{ color: "#64748b", margin: "0 6px" }}>|</span>
+                    <span>{item.result_count} result{item.result_count !== 1 ? "s" : ""}</span>
+                    <span style={{ color: "#64748b", margin: "0 6px" }}>|</span>
+                    <span>score {item.top_score.toFixed(2)}</span>
                   </div>
-                  <div className="flex items-center gap-6 sd-mono">
-                    <span>{item.result_count} results</span>
-                    <span>{item.top_score.toFixed(2)}</span>
-                    <span className="text-cream-800">{item.timestamp}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ color: "#64748b", fontSize: "0.75rem" }}>{item.timestamp}</span>
+                    <button
+                      onClick={() => { setQuery(item.query_text); onHistoryReplay(item.query_text); }}
+                      style={{
+                        background: "#3b82f6", color: "#fff",
+                        padding: "2px 8px", borderRadius: 4,
+                        fontSize: "0.75rem", fontWeight: 500, border: "none", cursor: "pointer",
+                        display: "flex", alignItems: "center", gap: 4,
+                      }}
+                    >
+                      <RotateCcw size={10} /> Re-run
+                    </button>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           </div>

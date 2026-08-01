@@ -19,7 +19,7 @@ import Footer from "./sections/Footer";
 
 import { useQuery, useIngestion, useVocabCheck } from "./hooks/useApi";
 import { useHistory } from "./hooks/useHistory";
-import type { SearchResult, QueryHistoryItem } from "./types";
+import type { SearchResult, QueryHistoryItem, ProcessLogStep } from "./types";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -53,6 +53,9 @@ export default function Home() {
   const [selectedVideo, setSelectedVideo] = useState<{ path: string; timestamp: number } | null>(null);
   const [currentQuery, setCurrentQuery] = useState("");
   const [showDiagnosis, setShowDiagnosis] = useState(false);
+  const [processLog, setProcessLog] = useState<ProcessLogStep[]>([]);
+  const [ingestStats, setIngestStats] = useState<Record<string, unknown> | null>(null);
+  const [ingestObjectTally, setIngestObjectTally] = useState<Record<string, Record<string, number>> | null>(null);
 
   const { execute: runQuery, loading: queryLoading } = useQuery();
   const { start: startIngest, status: ingestStatus, progress: ingestProgress, logs: ingestLogs, collection: ingestCollection } = useIngestion();
@@ -69,17 +72,47 @@ export default function Home() {
     setResults([]);
     setDiagnosis(null);
     setShowDiagnosis(false);
+    // Start processing log
+    setProcessLog([
+      { cls: "info", text: "⏳ Parsing query…" },
+    ]);
 
     await checkVocab(query);
+
+    setProcessLog(prev => [...prev, { cls: "info", text: `🔎 Searching Qdrant…` }]);
+
     const response = await runQuery(query, activeCollection || undefined);
-    if (!response) return;
+    if (!response) {
+      setProcessLog(prev => [...prev, { cls: "fail", text: "❌ Search request failed" }]);
+      return;
+    }
+
+    if (response.parsed?.filters) {
+      setProcessLog(prev => [...prev,
+        { cls: "muted", text: `🔍 Filter: <code>${JSON.stringify(response.parsed.filters)}</code>` },
+      ]);
+    }
 
     if (response.status === "match" && response.results) {
+      setProcessLog(prev => [...prev,
+        { cls: "muted", text: `📦 Found ${response.results.length} raw result(s)` },
+        { cls: "info",  text: "📊 Reranking by confidence…" },
+        { cls: "muted", text: "📂 Grouping by source video…" },
+        { cls: "pass",  text: `✅ Threshold check: PASS — best score ${(response.best_score || 0).toFixed(2)} ≥ threshold ${(response.threshold || 0.32).toFixed(2)}` },
+        { cls: "pass",  text: `🎯 Returning ${response.results.length} result(s) — select from dropdown to play clip` },
+      ]);
       setResults(response.results);
       setShowDiagnosis(false);
-    } else if (response.diagnosis) {
-      setDiagnosis(response.diagnosis);
-      setShowDiagnosis(true);
+    } else {
+      const best = response.best_score || 0;
+      setProcessLog(prev => [...prev,
+        { cls: "fail", text: `🔴 Threshold check: FAIL — best score ${best.toFixed(2)} < threshold ${(response.threshold || 0.32).toFixed(2)}` },
+        { cls: "muted", text: "🔬 Running no-match diagnosis…" },
+      ]);
+      if (response.diagnosis) {
+        setDiagnosis(response.diagnosis);
+        setShowDiagnosis(true);
+      }
     }
 
     const historyItem: QueryHistoryItem = {
@@ -116,9 +149,12 @@ export default function Home() {
         ingestStatus={ingestStatus}
         ingestProgress={ingestProgress}
         ingestLogs={ingestLogs}
+        ingestStats={ingestStats}
+        ingestObjectTally={ingestObjectTally}
         startIngest={startIngest}
         onSearch={handleSearch}
         queryLoading={queryLoading}
+        processLog={processLog}
         vocabWarnings={vocabWarnings}
         disabled={!activeCollection && ingestStatus !== "complete"}
         results={results}

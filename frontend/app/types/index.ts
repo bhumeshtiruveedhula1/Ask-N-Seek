@@ -68,3 +68,21 @@ export interface IngestStartResponse {
   video_path: string;
   status: string;
 }
+
+/** Stats emitted by the backend after ingestion completes */
+export interface IngestStats {
+  scenes?: number;
+  keyframes?: number;
+  objects?: number;
+  collection?: string;
+  [key: string]: unknown;
+}
+
+/** Per-class color tally returned by the bridge's /ingest/summary endpoint */
+export type ObjectTally = Record<string, Record<string, number>>;
+
+/** Log step for the Processing Log panel */
+export interface ProcessLogStep {
+  cls: "pass" | "fail" | "info" | "warn" | "muted";
+  text: string;
+}
