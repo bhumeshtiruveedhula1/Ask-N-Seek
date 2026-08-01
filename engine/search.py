@@ -67,6 +67,8 @@ class Result:
         Maximum confidence among matched_objects.
     explanation_facts : list[str]
         Structured facts for templated explanation generation (no hallucination).
+    score_breakdown : ScoreBreakdown | None
+        Per-dimension score breakdown (populated by search_structured).
     """
     video_id: str
     timestamp: float
@@ -74,6 +76,7 @@ class Result:
     matched_objects: list[dict]
     confidence_score: float
     explanation_facts: list[str] = field(default_factory=list)
+    score_breakdown: "ScoreBreakdown | None" = field(default=None, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +225,8 @@ def search_structured(
     # -----------------------------------------------------------------------
     # Step 6: Build Result objects
     # -----------------------------------------------------------------------
+    from engine.result_scoring import score_result  # local import avoids circular
+
     results: list[Result] = []
     for (video_id, frame_index), objs in candidates_by_frame.items():
         if not objs:
@@ -230,14 +235,16 @@ def search_structured(
         confidence_score = max(o.get(_QF, 0.0) for o in objs)
         explanation_facts = _build_facts(objs, filters, all_by_frame.get((video_id, frame_index), []))
 
-        results.append(Result(
+        result = Result(
             video_id=video_id,
             timestamp=ref[_QT],
             scene_id=ref[_QN],
             matched_objects=list(objs),
             confidence_score=confidence_score,
             explanation_facts=explanation_facts,
-        ))
+        )
+        result.score_breakdown = score_result(result, filter_dict)
+        results.append(result)
 
     # -----------------------------------------------------------------------
     # Rerank by confidence descending
