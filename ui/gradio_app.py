@@ -56,6 +56,10 @@ _QDRANT_CLIENT  = get_qdrant_client()
 _COLLECTION     = get_collection_name()
 _STUB_ROW_COUNT = count_stub_rows()
 
+# Query result cache — cleared on new video ingestion
+from engine.query_cache import QueryCache  # noqa: E402
+_QUERY_CACHE: QueryCache = QueryCache()
+
 # ---------------------------------------------------------------------------
 # CSS
 # ---------------------------------------------------------------------------
@@ -813,6 +817,13 @@ def process_query(
     threshold = load_threshold()
     log: list[tuple[str, str]] = []
 
+    # ── Cache hit: return instantly without re-running search ────────────────
+    cached = _QUERY_CACHE.get(query, target_coll)
+    if cached is not None:
+        yield cached
+        return
+    # ── End cache check ───────────────────────────────────────────────────────
+
     # ── Step 1: Parse ───────────────────────────────────────────────────────
     log.append(("info", "⏳ Parsing query…"))
     yield (
@@ -1018,6 +1029,15 @@ def process_query(
         history_list,
         gr.update(choices=_picker_choices, value=None, visible=bool(_picker_choices)),
     )
+    _QUERY_CACHE.set(query, target_coll, (
+        _log_html(log),
+        results_html,
+        None,
+        banner_html,
+        render_history_html(history_list),
+        history_list,
+        gr.update(choices=_picker_choices, value=None, visible=bool(_picker_choices)),
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -1368,7 +1388,8 @@ def build_app() -> gr.Blocks:
                 log_lines.append(f"[{phase}] {msg}")
                 if phase == "complete":
                     new_collection = stats.get("collection", new_collection)
-                    log_lines.append("__FOCUS_QUERY__")        # JS: focus query input
+                    _QUERY_CACHE.clear()                    # stale results invalid for new video
+                    log_lines.append("__FOCUS_QUERY__")    # JS: focus query input
                     summary_html = _generate_ingest_summary(new_collection, _QDRANT_CLIENT)
                 yield "\n".join(log_lines[-20:]), pct, stats, new_collection, video_path, summary_html, video_path
 
