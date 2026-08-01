@@ -1,0 +1,3 @@
+@echo off
+echo Starting Ask-N-Seek development services...
+python "%~dp0start_dev.py"
