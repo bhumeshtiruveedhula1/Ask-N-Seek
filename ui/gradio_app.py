@@ -1,20 +1,7 @@
 """
-ui/gradio_app.py — Gradio Blocks interface for Odysseus Part 3.
+ui/gradio_app.py — Ask-N-Seek Gradio 6 UI/UX.
 
-Layout
-------
-Top    : Query textbox + Submit button
-Mid-L  : Live processing log (streaming, step-by-step)
-Mid-R  : Results gallery (HTML cards, clickable)
-Bottom : Video player (HTML5 <video> with JS seek-to-timestamp)
-
-States
-------
-Match state        : Result cards rendered, log green tick, video player ready.
-No confident match : Gray panel with explicit message, log shows FAIL reason.
-No video selected  : Bottom player shows placeholder message.
-
-# TODO: SWAP FOR ACHILLES'S REAL IMPLEMENTATION (marked in 3 places below)
+Ask-N-Seek: Natural Language Video Retrieval Engine.
 """
 
 from __future__ import annotations
@@ -22,6 +9,7 @@ from __future__ import annotations
 import datetime
 import difflib
 import json
+import logging
 import os
 import queue
 import string
@@ -38,68 +26,86 @@ import config as _config
 from config import load_threshold
 from engine.parser_gateway import parse_query
 from engine.qdrant_gateway import get_qdrant_client, get_collection_name
-from engine.stub_data import count_stub_rows
-from engine.paths import get_video_path, get_frame_path  # noqa: F401  (used in JS template injection + card TODO)
 from engine.search import search_structured, Result
 from engine.explanation import generate_explanation
 from engine.diagnosis import run_diagnosis
 from engine.live_ingestor import LiveIngestor
+try:
+    from engine.scenario_presets import SCENARIO_PRESETS
+except ImportError:
+    SCENARIO_PRESETS = [
+        "person in red",
+        "person without helmet",
+        "two people",
+        "person left of car",
+        "purple elephant",
+    ]
+from engine.result_scoring import ScoreBreakdown
 from backend.vision.vocabulary import VOCABULARY, VOCABULARY_SET, SYNONYM_MAP
 from backend.query.patterns import COLOR_VOCAB, COLOR_ALIASES
+from engine.query_cache import QueryCache
+from engine.paths import get_video_path, get_frame_path
+try:
+    from engine.stub_data import count_stub_rows as count_stub_row
+except ImportError:
+    try:
+        from engine.stub_data import count_stub_row
+    except ImportError:
+        def count_stub_row() -> int:
+            return 72
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Initialise Qdrant client (module-level singleton)
+# Initialise singletons
 # ---------------------------------------------------------------------------
-# Controlled by USE_STUB_QDRANT in config.py / .env
-# TODO: SWAP FOR ACHILLES — set USE_STUB_QDRANT=False in .env and point to real collection
-_QDRANT_CLIENT  = get_qdrant_client()
-_COLLECTION     = get_collection_name()
-_STUB_ROW_COUNT = count_stub_rows()
-
-# Query result cache — cleared on new video ingestion
-from engine.query_cache import QueryCache  # noqa: E402
+_QDRANT_CLIENT = get_qdrant_client()
+_COLLECTION = get_collection_name()
 _QUERY_CACHE: QueryCache = QueryCache()
 
 # ---------------------------------------------------------------------------
-# CSS
+# Visual Design System (CSS)
 # ---------------------------------------------------------------------------
-
 CUSTOM_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 * { box-sizing: border-box; }
 
 body, .gradio-container {
     font-family: 'Inter', system-ui, sans-serif !important;
     background: #07070f !important;
+    color: #e2e8f0 !important;
 }
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
 .app-header {
     text-align: center;
-    padding: 32px 24px 16px;
+    padding: 32px 24px 20px;
     background: linear-gradient(135deg, #0d0d1a 0%, #12122a 100%);
     border-radius: 16px;
     border: 1px solid #1e1e3f;
     margin-bottom: 20px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 }
 .app-title {
-    font-size: 2rem;
+    font-size: 2.2rem;
     font-weight: 700;
     background: linear-gradient(90deg, #818cf8, #c084fc, #f472b6);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
     margin: 0 0 8px;
+    letter-spacing: -0.5px;
 }
 .app-subtitle {
-    color: #64748b;
-    font-size: 0.95rem;
+    color: #94a3b8;
+    font-size: 1rem;
     margin: 0;
+    font-weight: 400;
 }
 .app-badge {
     display: inline-block;
-    margin-top: 12px;
+    margin-top: 14px;
     padding: 4px 14px;
     background: rgba(99, 102, 241, 0.15);
     border: 1px solid rgba(99, 102, 241, 0.4);
@@ -109,6 +115,28 @@ body, .gradio-container {
     font-weight: 600;
     letter-spacing: 0.5px;
     text-transform: uppercase;
+}
+
+/* ── Preset buttons ──────────────────────────────────────────────────────── */
+.preset-row {
+    gap: 8px !important;
+    margin-bottom: 12px !important;
+}
+.preset-row button {
+    background: rgba(30, 30, 63, 0.6) !important;
+    border: 1px solid #1e1e3f !important;
+    color: #818cf8 !important;
+    font-size: 0.8rem !important;
+    font-weight: 500 !important;
+    border-radius: 8px !important;
+    padding: 6px 12px !important;
+    transition: all 0.15s ease !important;
+}
+.preset-row button:hover {
+    background: rgba(99, 102, 241, 0.2) !important;
+    border-color: #6366f1 !important;
+    color: #c7d2fe !important;
+    transform: translateY(-1px) !important;
 }
 
 /* ── Query row ───────────────────────────────────────────────────────────── */
@@ -138,7 +166,7 @@ body, .gradio-container {
     color: #475569;
     text-transform: uppercase;
     letter-spacing: 0.8px;
-    padding: 12px 16px 0;
+    padding: 12px 16px 4px;
 }
 
 /* ── Processing log ─────────────────────────────────────────────────────── */
@@ -178,30 +206,10 @@ body, .gradio-container {
     border: 1px solid #1e1e3f;
     border-radius: 12px;
     padding: 14px;
-    margin: 0 0 10px;
-    cursor: pointer;
+    margin: 0 0 12px;
     transition: all 0.18s ease;
     position: relative;
     overflow: hidden;
-    user-select: none;
-}
-.result-card::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(135deg, rgba(99,102,241,0.04), transparent);
-    opacity: 0;
-    transition: opacity 0.18s;
-}
-.result-card:hover::before { opacity: 1; }
-.result-card:hover {
-    border-color: #6366f1;
-    transform: translateY(-2px);
-    box-shadow: 0 8px 28px rgba(99, 102, 241, 0.18);
-}
-.result-card.selected {
-    border-color: #818cf8;
-    box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25);
 }
 .result-card-header {
     display: flex;
@@ -231,7 +239,7 @@ body, .gradio-container {
 
 .result-meta {
     font-size: 0.75rem;
-    color: #475569;
+    color: #64748b;
     margin-bottom: 8px;
 }
 .thumb-placeholder {
@@ -258,9 +266,9 @@ body, .gradio-container {
     background: rgba(99,102,241,0.08);
 }
 .bbox-tag {
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 0.7rem;
-    color: #475569;
+    color: #94a3b8;
     background: rgba(0,0,0,0.4);
     padding: 3px 8px;
     border-radius: 4px;
@@ -272,18 +280,12 @@ body, .gradio-container {
 }
 .explanation-text {
     font-size: 0.78rem;
-    color: #94a3b8;
+    color: #cbd5e1;
     font-style: italic;
     line-height: 1.5;
     margin-top: 6px;
     padding-top: 6px;
     border-top: 1px solid #1e1e3f;
-}
-.click-hint {
-    font-size: 0.68rem;
-    color: #2d2d50;
-    text-align: right;
-    margin-top: 6px;
 }
 
 /* ── No match ────────────────────────────────────────────────────────────── */
@@ -302,7 +304,7 @@ body, .gradio-container {
 }
 .no-match-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.6; }
 .no-match-title { font-size: 1rem; font-weight: 600; color: #64748b; margin: 0 0 8px; }
-.no-match-text  { font-size: 0.85rem; color: #374151; max-width: 280px; line-height: 1.5; margin: 0; }
+.no-match-text  { font-size: 0.85rem; color: #475569; max-width: 280px; line-height: 1.5; margin: 0; }
 
 /* ── Video player ────────────────────────────────────────────────────────── */
 .video-panel {
@@ -312,50 +314,6 @@ body, .gradio-container {
     padding: 16px;
     margin-top: 12px;
 }
-.video-panel-header {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: #475569;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    margin-bottom: 12px;
-}
-.video-placeholder {
-    height: 180px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: #0c0c1a;
-    border: 1px dashed #1e1e3f;
-    border-radius: 10px;
-    color: #374151;
-    font-size: 0.88rem;
-}
-video {
-    width: 100%;
-    border-radius: 8px;
-    background: #000;
-}
-.video-info-bar {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 10px;
-    flex-wrap: wrap;
-}
-.vid-badge, .time-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 12px;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 600;
-}
-.vid-badge  { background: rgba(99,102,241,0.12); color: #818cf8; border: 1px solid rgba(99,102,241,0.3); }
-.time-badge { background: rgba(16,185,129,0.12); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
-
-/* ── Submit button ───────────────────────────────────────────────────────── */
 button.primary {
     background: linear-gradient(135deg, #6366f1, #818cf8) !important;
     border: none !important;
@@ -372,38 +330,12 @@ button.primary:hover {
 """
 
 # ---------------------------------------------------------------------------
-# JavaScript injected on load
+# JavaScript for auto-focusing query input on ingestion complete
 # ---------------------------------------------------------------------------
-# Inject Python path templates as JS globals so _updateVideoPlayer() uses
-# config-driven paths instead of hardcoded strings.
-_VIDEO_TPL_JS  = json.dumps(_config.VIDEO_PATH_TEMPLATE)
-_FRAME_TPL_JS  = json.dumps(_config.FRAME_PATH_TEMPLATE)
-
-SETUP_JS = (
-    f"window._ODYSSEUS_VIDEO_TPL = {_VIDEO_TPL_JS};\n"
-    f"window._ODYSSEUS_FRAME_TPL = {_FRAME_TPL_JS};\n\n"
-) + """
-function setupOdysseus() {
-    // ── Result card click: event delegation (works with gr.HTML sanitization)
-    // Gradio strips inline onclick attrs — this document listener is the ONLY
-    // reliable way to handle clicks on dynamically generated HTML in Gradio 6.
+SETUP_JS = """
+function setupAskNSeek() {
+    // ── History item click: re-run query ─────────────────────────────
     document.addEventListener('click', function(e) {
-        var card = e.target.closest('.result-card');
-        if (card) {
-            var videoPath = card.getAttribute('data-video-path') || '';
-            var ts        = parseFloat(card.getAttribute('data-timestamp') || '0');
-
-            // Visual: toggle selected state
-            document.querySelectorAll('.result-card').forEach(function(c) {
-                c.classList.remove('selected');
-            });
-            card.classList.add('selected');
-
-            _updateVideoPlayer(videoPath, ts);
-            return;
-        }
-
-        // ── History item click: re-run query ─────────────────────────────
         var historyItem = e.target.closest('[data-history-query]');
         if (historyItem) {
             var qText = historyItem.getAttribute('data-history-query');
@@ -424,43 +356,6 @@ function setupOdysseus() {
     });
 }
 
-function _updateVideoPlayer(videoPath, timestamp) {
-    const container = document.getElementById('video-player-inner');
-    if (!container) return;
-
-    if (!videoPath || videoPath === 'None' || videoPath === '') {
-        container.innerHTML = '<p style="color:#475569;text-align:center;padding:32px 0;">🎬 No video loaded — drop a video file to begin.</p>';
-        return;
-    }
-
-    // Gradio 6: /file= + raw path (NO encodeURIComponent — breaks Windows backslashes)
-    const videoUrl = '/file=' + videoPath;
-
-    container.innerHTML = `
-        <div class="video-info-bar">
-            <span class="vid-badge">📹 Video</span>
-            <span class="time-badge">⏱ ${timestamp.toFixed(1)}s</span>
-        </div>
-        <video id="main-player" controls
-               style="width:100%;border-radius:8px;background:#000;">
-            <source src="${videoUrl}" type="video/mp4">
-        </video>
-    `;
-    const vid = document.getElementById('main-player');
-    if (vid) {
-        vid.addEventListener('loadedmetadata', () => { vid.currentTime = timestamp; });
-        setTimeout(() => { if (vid.readyState >= 1) vid.currentTime = timestamp; }, 200);
-    }
-}
-
-function _notifyGradio(elemId, value) {
-    const el = document.querySelector('#' + elemId + ' textarea');
-    if (!el) return;
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-    setter.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
 // Auto-focus query box when ingestion completes (__FOCUS_QUERY__ marker).
 setInterval(function() {
     var logEl = document.querySelector('#ingest-log textarea') ||
@@ -475,18 +370,16 @@ setInterval(function() {
     }
 }, 500);
 
-// Run setup once DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupOdysseus);
+    document.addEventListener('DOMContentLoaded', setupAskNSeek);
 } else {
-    setupOdysseus();
+    setupAskNSeek();
 }
 """
 
 # ---------------------------------------------------------------------------
 # HTML fragments
 # ---------------------------------------------------------------------------
-
 _NO_RESULTS_HTML = """
 <div class="no-match-panel">
     <div class="no-match-icon">🔭</div>
@@ -508,27 +401,14 @@ _NO_MATCH_HTML = """
 
 _LOADING_HTML = """
 <div class="no-match-panel">
-    <div class="no-match-icon" style="animation: pulse 1s infinite alternate;">⚙️</div>
+    <div class="no-match-icon">⚙️</div>
     <p class="no-match-title" style="color:#818cf8;">Processing…</p>
 </div>
 """
 
-_NO_VIDEO_HTML = """
-<div class="video-placeholder">
-    <span style="font-size:32px;margin-bottom:10px;opacity:0.4;">📺</span>
-    No video selected — click a result card to load
-</div>
-"""
-
-_VIDEO_PLAYER_WRAP = """
-<div id="video-player-inner">{inner}</div>
-"""
-
-
 # ---------------------------------------------------------------------------
-# Result card rendering
+# Result card rendering & score breakdown helper
 # ---------------------------------------------------------------------------
-
 def _conf_class(score: float) -> str:
     if score >= 0.75:
         return "conf-high"
@@ -546,72 +426,95 @@ def _conf_label(score: float) -> str:
 
 
 def _bbox_thumb_svg(bbox: list[float]) -> str:
-    """Render a tiny normalised bbox overlay inside the thumbnail."""
     if len(bbox) < 4:
         return ""
     x1, y1, x2, y2 = bbox
-    # Scale to 100% × 88px container
     lp = int(x1 * 100)
     tp = int(y1 * 100)
     wp = max(int((x2 - x1) * 100), 5)
     hp = max(int((y2 - y1) * 100), 5)
-    return (
-        f'<div class="thumb-bbox" '
-        f'style="left:{lp}%;top:{tp}%;width:{wp}%;height:{hp}%;"></div>'
-    )
+    return f'<div class="thumb-bbox" style="left:{lp}%;top:{tp}%;width:{wp}%;height:{hp}%;"></div>'
+
+
+def _render_score_bars(sb: ScoreBreakdown | None) -> str:
+    if sb is None:
+        return ""
+
+    cats = [
+        ("Object", getattr(sb, "object_score", 0), 40),
+        ("Color", getattr(sb, "color_score", 0), 20),
+        ("Spatial", getattr(sb, "spatial_score", 0), 20),
+        ("Negation", getattr(sb, "negation_score", 0), 20),
+    ]
+
+    lines = []
+    for cat_name, s_val, max_val in cats:
+        filled = int((s_val / max_val) * 40) if max_val > 0 else 0
+        filled = max(0, min(40, filled))
+        empty = 40 - filled
+        bar = "█" * filled + "░" * empty
+        lines.append(f"{cat_name:<10} {bar} {s_val}/{max_val}")
+
+    bars_str = "\n".join(lines)
+    total = getattr(sb, "total", 0)
+
+    return f"""
+    <div class="smart-score-panel" style="
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        font-size: 0.72rem;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid #1e1e3f;
+        border-radius: 8px;
+        padding: 8px 10px;
+        margin-top: 8px;
+        color: #94a3b8;
+    ">
+        <div style="font-weight: 600; color: #818cf8; margin-bottom: 4px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px;">Score Breakdown</div>
+        <pre style="margin: 0; padding: 0; font-family: inherit; font-size: inherit; color: #cbd5e1; line-height: 1.4;">{bars_str}</pre>
+        <div style="font-weight: 700; color: #c084fc; margin-top: 4px; text-align: right; font-size: 0.75rem;">
+            Score: {total}/100
+        </div>
+    </div>
+    """
 
 
 def render_result_card(result: Result, explanation: str, idx: int, video_path: str = "") -> str:
-    """Render one result as an HTML card with click attributes."""
-    # TODO: SWAP FOR ACHILLES'S REAL IMPLEMENTATION
-    # Replace thumb_icon with real frame image using get_frame_path():
-    #   from engine.paths import get_frame_path
-    #   fi   = result.matched_objects[0].get(_config.FIELD_MAP["qdrant_frame_idx"], 0)
-    #   src  = get_frame_path(result.video_id, fi)
-    #   thumb_html = f'<img src="{src}" style="width:100%;border-radius:8px;">'
     thumb_icon = "🎬"
 
-    # Payload field names from FIELD_MAP
-    _qc  = _config.FIELD_MAP["qdrant_class"]
-    _qo  = _config.FIELD_MAP["qdrant_color"]
-    _qb  = _config.FIELD_MAP["qdrant_bbox"]
+    _qc = _config.FIELD_MAP.get("qdrant_class", "class_name")
+    _qo = _config.FIELD_MAP.get("qdrant_color", "color")
+    _qb = _config.FIELD_MAP.get("qdrant_bbox", "bbox")
 
-    # Build bbox overlays from matched objects
     bbox_lines = []
     thumb_overlays = ""
     for obj in result.matched_objects:
         cls_name = obj.get(_qc, "?")
-        color    = obj.get(_qo, "?")
-        bbox     = obj.get(_qb, [])
+        color = obj.get(_qo, "?")
+        bbox = obj.get(_qb, [])
         if bbox:
             bbox_str = ", ".join(f"{b:.2f}" for b in bbox)
             bbox_lines.append(f"{cls_name}/{color}: [{bbox_str}]")
             thumb_overlays += _bbox_thumb_svg(bbox)
 
-    bbox_html = "".join(
-        f'<span class="bbox-tag">{line}</span>' for line in bbox_lines[:3]
-    )
+    bbox_html = "".join(f'<span class="bbox-tag">{line}</span>' for line in bbox_lines[:3])
 
     vid_id = result.video_id
-    ts     = result.timestamp
-    scene  = result.scene_id
-    cc     = _conf_class(result.confidence_score)
-    cl     = _conf_label(result.confidence_score)
+    ts = result.timestamp
+    scene = result.scene_id
+    cc = _conf_class(result.confidence_score)
+    cl = _conf_label(result.confidence_score)
+
+    score_bars_html = _render_score_bars(getattr(result, "score_breakdown", None))
 
     return f"""
-<div class="result-card"
-     data-video-path="{video_path}"
-     data-timestamp="{ts}"
-     id="result-card-{idx}">
-
+<div class="result-card" id="result-card-{idx}">
     <div class="result-card-header">
         <span class="vid-label">📹 {vid_id}</span>
         <span class="conf-badge {cc}">{cl}</span>
     </div>
 
     <div class="result-meta">
-        ⏱ {ts:.1f}s &nbsp;·&nbsp; Scene {scene}
-        &nbsp;·&nbsp; {len(result.matched_objects)} object(s)
+        ⏱ {ts:.1f}s &nbsp;·&nbsp; Scene {scene} &nbsp;·&nbsp; {len(result.matched_objects)} object(s)
     </div>
 
     <div class="thumb-placeholder">
@@ -622,7 +525,8 @@ def render_result_card(result: Result, explanation: str, idx: int, video_path: s
     {bbox_html}
 
     <p class="explanation-text">💡 {explanation}</p>
-    <p class="click-hint">▶ Click to seek video</p>
+    {score_bars_html}
+    <p class="click-hint" style="color:#64748b;font-size:0.68rem;text-align:right;margin-top:6px;">🔽 Select from dropdown below to play this clip</p>
 </div>
 """
 
@@ -646,26 +550,16 @@ def render_results_html(results: list[Result], video_path: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Log builder
+# Processing Log Builder
 # ---------------------------------------------------------------------------
-
 def _log_html(lines: list[tuple[str, str]]) -> str:
-    """
-    Build the processing log HTML.
-
-    lines: list of (css_class, text) where css_class ∈ {pass, fail, info, warn, muted}
-    """
-    items = "".join(
-        f'<div class="log-step {cls}">{text}</div>' for cls, text in lines
-    )
+    items = "".join(f'<div class="log-step {cls}">{text}</div>' for cls, text in lines)
     return f'<div class="log-container">{items}</div>'
 
 
 # ---------------------------------------------------------------------------
+# Vocabulary Coverage & History Helpers
 # ---------------------------------------------------------------------------
-# Vocabulary Coverage & History Helpers (U2 / U3)
-# ---------------------------------------------------------------------------
-
 QUERY_SYNTAX_WORDS: set[str] = {
     "in", "on", "at", "with", "without", "no", "not", "of", "to", "the", "a", "an",
     "and", "or", "left", "right", "is", "are", "has", "have", "wearing", "less",
@@ -674,8 +568,6 @@ QUERY_SYNTAX_WORDS: set[str] = {
     "than", "least", "exactly", "person", "people", "man", "woman", "child", "car",
 }
 
-# Split multi-word colors into individual tokens so "dark" is not flagged
-# when the parser correctly resolves "dark green" as a bigram.
 _COLOR_WORDS: set[str] = set()
 for _mc in list(COLOR_VOCAB) + list(COLOR_ALIASES.keys()):
     for _w in _mc.split():
@@ -687,13 +579,12 @@ KNOWN_TOKENS: set[str] = (
     | set(SYNONYM_MAP.values())
     | COLOR_VOCAB
     | set(COLOR_ALIASES.keys())
-    | _COLOR_WORDS          # individual words from multi-word colors (e.g. "dark", "light")
+    | _COLOR_WORDS
     | QUERY_SYNTAX_WORDS
 )
 
 
 def check_vocabulary_banner(query: str) -> str:
-    """Check query tokens against vocabulary and generate OOV warning banner HTML."""
     punct_trans = str.maketrans(string.punctuation, " " * len(string.punctuation))
     clean_q = query.translate(punct_trans).lower()
     tokens = clean_q.split()
@@ -728,7 +619,6 @@ def check_vocabulary_banner(query: str) -> str:
 
 
 def render_history_html(history: list[dict] | None) -> str:
-    """Render session query history as scrollable HTML panel with click-to-replay."""
     if not history:
         return """
         <div style="color:#64748b;font-size:0.85rem;padding:8px 0;font-style:italic;">
@@ -785,19 +675,14 @@ def render_history_html(history: list[dict] | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Core generator — drives the Gradio streaming update
+# Generator Function: process_query
 # ---------------------------------------------------------------------------
-
 def process_query(
     query: str,
     collection_name: str | None = None,
     history: list[dict] | None = None,
     video_path: str = "",
 ):
-    """
-    Gradio generator function. Yields (log_html, results_html, video_html, banner_html, history_html, history_list)
-    tuples so each processing step appears live in the UI.
-    """
     target_coll = collection_name or _COLLECTION
     history_list = list(history or [])
 
@@ -817,12 +702,24 @@ def process_query(
     threshold = load_threshold()
     log: list[tuple[str, str]] = []
 
-    # ── Cache hit: return instantly without re-running search ────────────────
+    # ── Cache hit check ──────────────────────────────────────────────────────
     cached = _QUERY_CACHE.get(query, target_coll)
     if cached is not None:
-        yield cached
+        log_html, res_html, vid_upd, b_html, hist_h, hist_l, pick_upd = cached
+        cached_log_html = _log_html([
+            ("pass", "✅ Result served from cache"),
+            ("info", f"⚡ Returning cached results for: '{query}'"),
+        ])
+        yield (
+            cached_log_html,
+            res_html,
+            vid_upd,
+            b_html,
+            render_history_html(history_list),
+            history_list,
+            pick_upd,
+        )
         return
-    # ── End cache check ───────────────────────────────────────────────────────
 
     # ── Step 1: Parse ───────────────────────────────────────────────────────
     log.append(("info", "⏳ Parsing query…"))
@@ -941,7 +838,6 @@ def process_query(
             gr.update(),
         )
 
-        # Run constraint-level diagnosis and replace static no-match panel
         log.append(("muted", "🔬 Running no-match diagnosis…"))
         yield (
             _log_html(log),
@@ -958,10 +854,10 @@ def process_query(
                 _QDRANT_CLIENT,
                 target_coll,
             )
-            diag_html = diag["html"]
-        except Exception as exc:  # noqa: BLE001
+            diag_html = diag.get("html", _NO_MATCH_HTML) if isinstance(diag, dict) else _NO_MATCH_HTML
+        except Exception as exc:
             logger.warning("diagnosis failed: %s", exc)
-            diag_html = _NO_MATCH_HTML   # fall back to static panel
+            diag_html = _NO_MATCH_HTML
 
         entry = {
             "query_text": query,
@@ -998,7 +894,7 @@ def process_query(
     )
 
     # ── Step 6: Render ───────────────────────────────────────────────────────
-    log.append(("pass", f"🎯 Returning {len(results)} result(s) — click a card to seek video"))
+    log.append(("pass", f"🎯 Returning {len(results)} result(s) — select from dropdown to play clip"))
     results_html = render_results_html(results, video_path)
 
     entry = {
@@ -1010,8 +906,6 @@ def process_query(
     }
     history_list = [entry] + history_list
 
-    # Build picker choices: (display_label, encoded_value)
-    # Encoded value = "video_path:::timestamp" decoded by result_picker.change handler
     _picker_choices = [
         (
             f"{i+1}. {r.video_id} @ {r.timestamp:.1f}s  [{_conf_label(r.confidence_score)}]",
@@ -1020,7 +914,7 @@ def process_query(
         for i, r in enumerate(results)
     ] if results else []
 
-    yield (
+    final_tuple = (
         _log_html(log),
         results_html,
         None,
@@ -1029,26 +923,14 @@ def process_query(
         history_list,
         gr.update(choices=_picker_choices, value=None, visible=bool(_picker_choices)),
     )
-    _QUERY_CACHE.set(query, target_coll, (
-        _log_html(log),
-        results_html,
-        None,
-        banner_html,
-        render_history_html(history_list),
-        history_list,
-        gr.update(choices=_picker_choices, value=None, visible=bool(_picker_choices)),
-    ))
+    _QUERY_CACHE.set(query, target_coll, final_tuple)
+    yield final_tuple
 
 
 # ---------------------------------------------------------------------------
 # Detection summary helper
 # ---------------------------------------------------------------------------
-
 def _generate_ingest_summary(collection_name: str, client) -> str:
-    """
-    Scroll ALL points from the collection and build a class/color breakdown.
-    Returns styled HTML showing exactly what objects were detected in the video.
-    """
     if not collection_name:
         return ""
     try:
@@ -1058,22 +940,20 @@ def _generate_ingest_summary(collection_name: str, client) -> str:
             with_payload=True,
             with_vectors=False,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
     if not points:
         return ""
 
-    # Build: {class_name: {color: count}}
     tally: dict[str, dict[str, int]] = {}
     for pt in points:
         p = pt.payload or {}
-        cls   = p.get("class_name", "unknown")
+        cls = p.get("class_name", "unknown")
         color = p.get("color") or "unknown"
         tally.setdefault(cls, {}).setdefault(color, 0)
         tally[cls][color] += 1
 
-    # Class → emoji map (common COCO classes)
     EMOJI = {
         "person": "🚶", "car": "🚗", "truck": "🚚", "bus": "🚌",
         "bicycle": "🚲", "motorcycle": "🏍", "dog": "🐕", "cat": "🐈",
@@ -1121,29 +1001,29 @@ def _generate_ingest_summary(collection_name: str, client) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Build the Gradio app
+# Main Gradio App Builder
 # ---------------------------------------------------------------------------
-
 def build_app() -> gr.Blocks:
     with gr.Blocks(
-        title="Odysseus — Video Query Engine",
+        title="Ask-N-Seek — Natural Language Video Retrieval",
+        head=f"<style>{CUSTOM_CSS}</style><script>{SETUP_JS}</script>",
     ) as demo:
 
-        # ── Header ──────────────────────────────────────────────────────────
+        # ── 1. HEADER ────────────────────────────────────────────────────────
         gr.HTML("""
         <div class="app-header">
-            <h1 class="app-title">🎯 Odysseus</h1>
-            <p class="app-subtitle">Natural Language Video Query Engine</p>
-            <span class="app-badge">Milestone 1 · Stub-Wired</span>
+            <h1 class="app-title">Ask-N-Seek</h1>
+            <p class="app-subtitle">Type what happened. We'll show you exactly where — and prove it.</p>
+            <span class="app-badge">Backend Ready</span>
         </div>
         """)
 
         # ── Session state ───────────────────────────────────────────────────
         judge_collection = gr.State(value=None)
-        query_history    = gr.State(value=[])
+        query_history = gr.State(value=[])
         video_path_state = gr.State(value="")
 
-        # ── Ingestion panel ──────────────────────────────────────────────────
+        # ── 2. INGESTION PANEL ───────────────────────────────────────────────
         with gr.Accordion("📥 Live Judge-Video Ingestion", open=True):
             gr.HTML('<div class="panel-label">Drop a video to index it for querying</div>')
             with gr.Row():
@@ -1176,43 +1056,52 @@ def build_app() -> gr.Blocks:
                         elem_id="ingest-summary",
                     )
 
-        gr.HTML('<hr style="border-color:#1e293b;margin:8px 0;">')
+        gr.HTML('<hr style="border-color:#1e293b;margin:16px 0;">')
 
-        # ── Query section (shown after ingestion completes) ──────────────────
-        with gr.Column(visible=True, elem_id="query-section") as query_section:
-            gr.HTML('<div class="panel-label">Search</div>')
+        # ── 3. QUERY SECTION ─────────────────────────────────────────────────
+        with gr.Column(visible=True, elem_id="query-section"):
+            gr.HTML('<div class="panel-label">Scenario Presets</div>')
+            preset_btns = []
+            with gr.Row(elem_classes=["preset-row"]):
+                for preset in SCENARIO_PRESETS:
+                    p_btn = gr.Button(preset, size="sm", variant="secondary")
+                    preset_btns.append((p_btn, preset))
 
-        # ── Query row ────────────────────────────────────────────────────────
-        with gr.Row(elem_classes=["query-row"]):
-            query_box = gr.Textbox(
-                placeholder=(
-                    "Try: 'person in red'  ·  'person without helmet'  ·  "
-                    "'two people'  ·  'person left of car'"
-                ),
-                label="",
-                scale=5,
-                lines=1,
-                max_lines=1,
-                elem_id="query-input",
-            )
-            submit_btn = gr.Button("🔍 Search", variant="primary", scale=1, min_width=120)
+            gr.HTML('<div class="panel-label" style="margin-top:8px;">Search Query</div>')
+            with gr.Row(elem_classes=["query-row"]):
+                query_box = gr.Textbox(
+                    placeholder="Try: 'person in red' · 'person without helmet' · 'two people' · 'person left of car'",
+                    label="",
+                    scale=5,
+                    lines=1,
+                    max_lines=1,
+                    elem_id="query-input",
+                )
+                submit_btn = gr.Button("🔍 Search", variant="primary", scale=1, min_width=120)
 
-        # ── Middle row ───────────────────────────────────────────────────────
+        # ── Hidden / State elements ──────────────────────────────────────────
+        current_video_path = gr.Textbox(
+            visible=False,
+            elem_id="current-video-path",
+            label="",
+            value="",
+        )
+
+        # ── 4. MAIN WORKSPACE (2 columns) ────────────────────────────────────
         with gr.Row():
-            # Processing log
+            # LEFT: Processing Log
             with gr.Column(scale=1):
                 gr.HTML('<div class="panel-label">Processing Log</div>')
                 log_output = gr.HTML(
-                    _log_html([("muted", "⌛ Waiting for query…")]),
+                    _log_html([("muted", "⌛ Waiting for a query…")]),
                     elem_id="log-panel",
                 )
 
-            # Results
+            # RIGHT: Results Panel + Seek Dropdown
             with gr.Column(scale=2):
                 gr.HTML('<div class="panel-label">Results</div>')
                 vocab_banner = gr.HTML("", elem_id="vocab-banner")
                 results_output = gr.HTML(_NO_RESULTS_HTML, elem_id="results-panel")
-                # Native Gradio dropdown for seek — no JS/Shadow DOM issues
                 result_picker = gr.Dropdown(
                     label="▶ Jump to result (click to seek video)",
                     choices=[],
@@ -1222,7 +1111,7 @@ def build_app() -> gr.Blocks:
                     elem_id="result-picker",
                 )
 
-        # ── Video player (native gr.Video — no HTML/script hacks) ──────────
+        # ── 5. VIDEO PLAYER ──────────────────────────────────────────────────
         gr.HTML('<div class="panel-label" style="margin-top:16px;">Video Player</div>')
         video_output = gr.Video(
             label="Selected Clip",
@@ -1232,51 +1121,19 @@ def build_app() -> gr.Blocks:
             elem_id="video-panel",
         )
 
-        # ── Query History Panel (U2) ─────────────────────────────────────────
+        # ── 6. QUERY HISTORY ─────────────────────────────────────────────────
         with gr.Accordion("📜 Session Query History", open=True):
             history_panel = gr.HTML(render_history_html([]), elem_id="history-panel")
 
-        # Hidden textbox for JS→Python card-click notification
-        selected_card_data = gr.Textbox(
-            visible=False,
-            elem_id="odysseus-card-data",
-            label="",
-        )
-
-        # Hidden textbox: stores uploaded video path for JS video player (Fix 2)
-        current_video_path = gr.Textbox(
-            visible=False,
-            elem_id="current-video-path",
-            label="",
-            value="",
-        )
-
-        # ── Quick-test buttons ────────────────────────────────────────────────
-        with gr.Accordion("📋 Verification Queries (Milestone 1 Checklist)", open=False):
-            gr.Markdown(
-                "Click any button to pre-fill the query box with a verification test case."
-            )
-            with gr.Row():
-                for q in [
-                    "person in red",
-                    "person without helmet",
-                    "two people",
-                    "person left of car",
-                    "purple elephant",
-                ]:
-                    btn = gr.Button(q, size="sm")
-                    btn.click(lambda v=q: v, outputs=query_box)
-
-        # ── Footer ───────────────────────────────────────────────────────────
+        # Footer
         gr.HTML("""
-        <div style="text-align:center;padding:20px 0 8px;color:#1e1e3f;font-size:0.75rem;">
-            Odysseus Part 3 · Milestone 1 · Stub-Wired ·
-            No FAISS · No Embeddings · No LLM
+        <div style="text-align:center;padding:24px 0 8px;color:#334155;font-size:0.75rem;">
+            Ask-N-Seek · Natural Language Video Retrieval Engine
         </div>
         """)
 
-        # ── Wire events ──────────────────────────────────────────────────────
-        search_inputs  = [query_box, judge_collection, query_history, video_path_state]
+        # ── WIRING & EVENT HANDLERS ──────────────────────────────────────────
+        search_inputs = [query_box, judge_collection, query_history, video_path_state]
         search_outputs = [log_output, results_output, video_output, vocab_banner, history_panel, query_history, result_picker]
 
         def _threaded_process_query(
@@ -1285,21 +1142,16 @@ def build_app() -> gr.Blocks:
             history: list[dict] | None = None,
             video_path: str | None = None,
         ):
-            """
-            Thread-safe wrapper: runs process_query() in a background thread,
-            streams updates via a queue so the Gradio event loop never blocks.
-            Sentinel None signals the generator to stop.
-            """
             q: queue.Queue = queue.Queue()
 
             def _worker():
                 try:
-                    for update in process_query(query, collection_name, history, video_path):
+                    for update in process_query(query, collection_name, history, video_path or ""):
                         q.put(update)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.error("process_query thread error: %s", exc)
                 finally:
-                    q.put(None)  # sentinel
+                    q.put(None)
 
             t = threading.Thread(target=_worker, daemon=True)
             t.start()
@@ -1310,6 +1162,7 @@ def build_app() -> gr.Blocks:
                     break
                 yield item
 
+        # Search submit triggers
         submit_btn.click(
             fn=_threaded_process_query,
             inputs=search_inputs,
@@ -1321,13 +1174,19 @@ def build_app() -> gr.Blocks:
             outputs=search_outputs,
         )
 
-        # ── Result picker: native Gradio seek (no JS/Shadow DOM) ─────────────
+        # Preset buttons: pre-fill query_box AND auto-submit
+        for p_btn, preset in preset_btns:
+            p_btn.click(
+                fn=lambda p=preset: p,
+                outputs=[query_box],
+            ).then(
+                fn=_threaded_process_query,
+                inputs=search_inputs,
+                outputs=search_outputs,
+            )
+
+        # Video Seek Dropdown event handler
         def _on_result_picked(encoded_value: str):
-            """
-            Decode 'video_path:::timestamp' from dropdown selection.
-            Returns gr.update() for native gr.Video component.
-            Zero HTML, zero JavaScript, zero script tags.
-            """
             if not encoded_value or ":::" not in encoded_value:
                 return gr.update(value=None)
             parts = encoded_value.split(":::", 1)
@@ -1338,7 +1197,6 @@ def build_app() -> gr.Blocks:
                 ts = 0.0
             if not vpath or vpath == "None":
                 return gr.update(value=None)
-            # gr.Video with playback_position seeks to timestamp natively
             return gr.update(value=vpath, playback_position=ts)
 
         result_picker.change(
@@ -1347,20 +1205,14 @@ def build_app() -> gr.Blocks:
             outputs=[video_output],
         )
 
-        # ── Ingestion event: auto-trigger on file drop ───────────────────
+        # Ingestion Handler
         def _start_ingestion(file_obj, current_collection):
-            """
-            Background-thread ingestion using same queue pattern as
-            _threaded_process_query.  Yields (log, progress, stats, collection)
-            tuples.  On completion, returns the new judge collection name
-            so future queries target it.
-            """
             if file_obj is None:
                 yield "", 0, None, current_collection, "", "", ""
                 return
 
             video_path = file_obj.name if hasattr(file_obj, "name") else str(file_obj)
-            ingestor   = LiveIngestor(_QDRANT_CLIENT)
+            ingestor = LiveIngestor(_QDRANT_CLIENT)
             iq: queue.Queue = queue.Queue()
             log_lines: list[str] = []
 
@@ -1368,7 +1220,7 @@ def build_app() -> gr.Blocks:
                 try:
                     for upd in ingestor.ingest(video_path):
                         iq.put(upd)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.error("ingestion thread error: %s", exc)
                 finally:
                     iq.put(None)
@@ -1376,20 +1228,20 @@ def build_app() -> gr.Blocks:
             threading.Thread(target=_worker, daemon=True).start()
 
             new_collection = current_collection
-            summary_html   = ""
+            summary_html = ""
             while True:
                 upd = iq.get()
                 if upd is None:
                     break
-                phase   = upd.get("phase", "")
-                pct     = upd.get("progress_pct", 0)
-                msg     = upd.get("message", "")
-                stats   = upd.get("stats", {})
+                phase = upd.get("phase", "")
+                pct = upd.get("progress_pct", 0)
+                msg = upd.get("message", "")
+                stats = upd.get("stats", {})
                 log_lines.append(f"[{phase}] {msg}")
                 if phase == "complete":
                     new_collection = stats.get("collection", new_collection)
-                    _QUERY_CACHE.clear()                    # stale results invalid for new video
-                    log_lines.append("__FOCUS_QUERY__")    # JS: focus query input
+                    _QUERY_CACHE.clear()
+                    log_lines.append("__FOCUS_QUERY__")
                     summary_html = _generate_ingest_summary(new_collection, _QDRANT_CLIENT)
                 yield "\n".join(log_lines[-20:]), pct, stats, new_collection, video_path, summary_html, video_path
 
