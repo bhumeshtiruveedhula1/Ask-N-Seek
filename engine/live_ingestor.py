@@ -236,6 +236,7 @@ class LiveIngestor:
                     "confidence":        det["confidence"],
                     "bbox":              list(det["bbox"]),
                     "spatial_relations": det.get("spatial_relations", []),
+                    "detection_source":  det.get("detection_source", "full_primary"),
                 }
                 points.append(PointStruct(id=pt_id, vector=_DUMMY_VECTOR, payload=payload))
 

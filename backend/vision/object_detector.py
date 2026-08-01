@@ -51,7 +51,8 @@ DetectionResult = TypedDict('DetectionResult', {
     'confidence':      float, # 0.0 - 1.0
     # 'color' field removed: color extraction is Odysseus's Part 2 scope
     # (contract reply 2026-07-29) — color_extractor.py preserved but unhooked
-    'spatial_relations': list, # SpatialRelation items
+    'spatial_relations':  list, # SpatialRelation items
+    'detection_source':   str,  # e.g. 'full_primary' (future: 'cascade_fallback')
 })
 
 
@@ -187,6 +188,7 @@ class ObjectDetector:
                 'bbox':              bbox,
                 'confidence':        round(conf, 4),
                 'spatial_relations': [],        # filled below
+                'detection_source':  'full_primary',
             })
 
         # -- Compute spatial relations for this frame --------------------
