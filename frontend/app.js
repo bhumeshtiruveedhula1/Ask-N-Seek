@@ -1,3315 +1,997 @@
 /* ═══════════════════════════════════════════════════════════════
-
-
-
    ASK-N-SEEK — App Logic v2.4
-
-
-
-   Fully wired to real bridge_server.py backend.
-
-
-
-   Features: real ingestion, scenario presets, vocab check,
-
-
-
-             score bars, diagnosis, query history, video seek.
-
-
-
+   Real backend integration: upload, poll, search, play
    ═══════════════════════════════════════════════════════════════ */
-
-
-
-
-
-
 
 const API_BASE = 'http://localhost:8000';
 
-
-
-const POLL_INTERVAL_MS = 800;
-
-
-
-
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
 // STATE
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
 let state = {
-
-
-
-  collection: null,       // active Qdrant collection name
-
-
-
-  results: [],            // current search results
-
-
-
-  history: [],            // [{query, count, time, topScore}]
-
-
-
+  collection: null,
+  currentCollection: null,
+  results: [],
+  currentResults: [],
+  history: [],
   currentQuery: '',
-
-
-
   isUploading: false,
-
-
-
-  currentJobId: null,     // active ingestion job id
-
-
-
-  pollTimer: null,        // setInterval handle for ingestion polling
-
-  detectedClasses: [],    // [{class, count}] from /ingest/status top_classes
-
-
-
-  videoPath: null,        // currently loaded video src
-
-
-
+  _uploadStartTime: null,
+  currentClipEnd: null,
+  detectedClasses: {},
+  _pollTimer: null,
 };
 
-
-
-
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
 // PARTICLE SYSTEM (Hero)
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
 function initParticles() {
-
-
-
   const container = document.getElementById('particles');
-
-
-
   if (!container) return;
 
-
-
-  for (let i = 0; i < 50; i++) {
-
-
-
+  const particleCount = 50;
+  for (let i = 0; i < particleCount; i++) {
     const p = document.createElement('div');
-
-
-
     p.className = 'particle';
-
-
-
     p.style.left = Math.random() * 100 + '%';
-
-
-
     p.style.top = Math.random() * 100 + '%';
-
-
-
     p.style.animationDelay = Math.random() * 15 + 's';
-
-
-
     p.style.animationDuration = (10 + Math.random() * 10) + 's';
-
-
-
     p.style.width = (1 + Math.random() * 2) + 'px';
-
-
-
     p.style.height = p.style.width;
-
-
-
     p.style.opacity = 0.2 + Math.random() * 0.5;
-
-
-
     container.appendChild(p);
-
-
-
   }
-
-
-
 }
 
-
-
-
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
 // SCROLL REVEAL
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
 function initScrollReveal() {
-
-
-
   const observer = new IntersectionObserver((entries) => {
-
-
-
     entries.forEach(entry => {
-
-
-
-      if (entry.isIntersecting) entry.target.classList.add('visible');
-
-
-
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
     });
-
-
-
   }, { threshold: 0.15, rootMargin: '0px 0px -50px 0px' });
 
-
-
-
-
-
-
   document.querySelectorAll('.quote-text, .quote-attribution, .reveal').forEach(el => {
-
-
-
     observer.observe(el);
-
-
-
   });
-
-
-
 }
 
-
-
-
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
 // NAVIGATION SCROLL EFFECT
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
 function initNavScroll() {
-
-
-
   const nav = document.querySelector('.nav');
-
-
-
   window.addEventListener('scroll', () => {
-
-
-
-    nav.classList.toggle('scrolled', window.scrollY > 100);
-
-
-
+    if (window.scrollY > 100) {
+      nav.classList.add('scrolled');
+    } else {
+      nav.classList.remove('scrolled');
+    }
   });
-
-
-
 }
 
-
-
-
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
-// BRIDGE HEALTH CHECK & MODE INDICATOR
-
-
-
+// BACKEND HEALTH + SCENARIO PRESETS
 // ═══════════════════════════════════════════════════════════════
-
-
-
-async function checkBridgeHealth() {
-
-
-
-  const dot = document.getElementById('statusDot');
-
-
-
-  const text = document.getElementById('statusText');
-
-
+async function checkBackend() {
+  const dot = document.getElementById('globalBridgeDot');
+  const txt = document.getElementById('globalBridgeText');
 
   try {
-
-
-
-    const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
-
-
-
+    const res = await fetch(API_BASE + '/health');
     const data = await res.json();
 
+    const connected = data.backend_mode === 'connected';
+    const color = connected ? '#10b981' : '#fbbf24';
+    const label = connected ? 'Backend connected' : 'Mock mode — no real backend';
 
+    dot.style.background = color;
+    dot.style.boxShadow = '0 0 6px ' + color;
+    txt.textContent = label;
 
-    const isConnected = data.backend_mode === 'connected';
-
-
-
-    dot.className = 'status-dot ' + (isConnected ? 'connected' : 'mock');
-
-
-
-    text.textContent = isConnected
-
-
-
-      ? `Backend connected — ${data.collection || 'ready'}`
-
-
-
-      : `Mock mode — start bridge_server.py with real backend`;
-
-
-
-  } catch {
-
-
-
-    dot.className = 'status-dot offline';
-
-
-
-    text.textContent = 'Bridge offline — start: cd frontend && python bridge_server.py';
-
-
-
-  }
-
-
-
-}
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-// SCENARIO PRESETS — fetched from /scenarios
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-// PROMPT 4: Preset → required class names (from scenario_presets.py ids)
-const PRESET_CLASS_MAP = {
-  'safety_violation': { primary: 'person',   secondary: 'helmet'  },
-  'traffic_incident': { primary: 'car',       secondary: 'person'  },
-  'lost_item':        { primary: 'backpack',  secondary: null       },
-  'access_control':   { primary: 'person',   secondary: 'badge'   },
-  'crowd_check':      { primary: 'person',   secondary: null       },
-};
-
-// PROMPT 4: Build tooltip text from detectedClasses for a given preset
-function _presetTooltip(presetId, detectedClasses) {
-  const map = PRESET_CLASS_MAP[presetId];
-  if (!map) return '';
-  const find = (cls) => detectedClasses.find(d => d.class && d.class.toLowerCase() === cls.toLowerCase());
-  const lines = [];
-  const p = find(map.primary);
-  if (p) lines.push(p.class + ': ' + p.count + ' detected');
-  if (map.secondary) {
-    const s = find(map.secondary);
-    if (s) lines.push(s.class + ': ' + s.count + ' detected');
-    else    lines.push(map.secondary + ': not detected');
-  }
-  if (lines.length === 0) lines.push('None of the required objects detected');
-  return lines.join('
-');
-}
-
-// PROMPT 4: Determine if a preset is relevant given detectedClasses
-function _presetIsRelevant(presetId, detectedClasses) {
-  const map = PRESET_CLASS_MAP[presetId];
-  if (!map) return false;
-  const classNames = detectedClasses.map(d => (d.class || '').toLowerCase());
-  return classNames.includes(map.primary.toLowerCase());
-}
-
-// Cache of fetched scenarios (so refreshPresets doesn't re-fetch)
-let _cachedScenarios = null;
-
-async function loadScenarios() {
-  const grid = document.getElementById('presetsGrid');
-  try {
-    const res = await fetch(`${API_BASE}/scenarios`);
-    _cachedScenarios = await res.json();
-    renderPresetsGrid(_cachedScenarios, state.detectedClasses);
-  } catch {
-    grid.innerHTML = '<div class="preset-loading" style="color:rgba(255,255,255,0.3)">Scenarios unavailable - bridge offline</div>';
-  }
-}
-
-// Called after ingestion completes with updated detectedClasses
-function refreshPresets(detectedClasses) {
-  if (_cachedScenarios) {
-    renderPresetsGrid(_cachedScenarios, detectedClasses);
-  }
-  renderQuickChips(detectedClasses);
-}
-
-// Core render: builds preset buttons with relevance state + tooltip
-function renderPresetsGrid(scenarios, detectedClasses) {
-  const grid = document.getElementById('presetsGrid');
-  if (!grid) return;
-  const hasDetected = detectedClasses && detectedClasses.length > 0;
-  grid.innerHTML = '';
-
-  scenarios.forEach(s => {
-    const btn = document.createElement('button');
-    btn.dataset.query = s.query;
-    btn.dataset.id = s.id;
-
-    // Task 1: Relevance check
-    const relevant = hasDetected && _presetIsRelevant(s.id, detectedClasses);
-    const dimmed   = hasDetected && !relevant;
-
-    // Base class
-    let cls = 'scenario-btn';
-    if (relevant) cls += ' relevant';
-    if (dimmed)   cls += ' dimmed';
-    btn.className = cls;
-
-    // Detected tag (only when relevant)
-    const detectedTag = relevant
-      ? '<span class="preset-detected-tag"><span class="preset-detected-dot"></span>Detected</span>'
-      : '';
-
-    // Task 3: Tooltip text
-    const ttLines = hasDetected
-      ? _presetTooltip(s.id, detectedClasses)
-      : 'Upload a video to see relevance';
-    const tooltipHtml = '<span class="preset-tooltip">' + ttLines.replace(/
-/g, '<br>') + '</span>';
-
-    btn.innerHTML = '<span class="preset-label">' + s.label + '</span>' +
-                    '<span class="preset-query">' + s.query + '</span>' +
-                    detectedTag + tooltipHtml;
-
-    if (!dimmed) {
-      btn.addEventListener('click', () => {
-        document.getElementById('queryInput').value = s.query;
-        performSearch(s.query);
-        document.getElementById('search').scrollIntoView({ behavior: 'smooth' });
-      });
+    // Fetch scenarios
+    try {
+      const sRes = await fetch(API_BASE + '/scenarios');
+      const scenarios = await sRes.json();
+      const list = Array.isArray(scenarios) ? scenarios : (scenarios.scenarios || []);
+      if (list.length > 0) {
+        renderPresets(list);
+        document.getElementById('scenarioPresets').style.display = 'block';
+      }
+    } catch (e) {
+      // Scenarios are optional — silently skip
     }
 
-    grid.appendChild(btn);
-  });
+  } catch (e) {
+    dot.style.background = '#ef4444';
+    txt.textContent = 'Bridge offline — start uvicorn bridge_server:app --port 8000';
+  }
 }
 
-// Task 2: Render quick-search chips from top detected classes
-function renderQuickChips(detectedClasses) {
-  const section = document.getElementById('quickChipsSection');
-  const row     = document.getElementById('quickChipsRow');
-  if (!section || !row) return;
+// ═══════════════════════════════════════════════════════════════
+// SCENARIO PRESETS
+// ═══════════════════════════════════════════════════════════════
 
-  if (!detectedClasses || detectedClasses.length === 0) {
-    section.style.display = 'none';
-    return;
-  }
+// Which class names must be present in detectedClasses for a scenario to be "relevant"
+const SCENARIO_NEEDS = {
+  safety_violation: ['person'],
+  traffic_incident: ['car', 'person'],
+  lost_item:        ['backpack'],
+  access_control:   ['person'],
+  crowd_check:      ['person'],
+};
 
-  // Top 5 chips
-  const top5 = detectedClasses.slice(0, 5);
-  row.innerHTML = top5.map(item => {
-    const cls = item.class || String(item);
-    const cnt = item.count || '';
-    return '<button class="quick-chip" onclick="performSearch('' + cls.replace(/'/g, "\'") + ''); document.getElementById('search').scrollIntoView({behavior:'smooth'})">' +
-           cls + (cnt ? '<span class="quick-chip-count">' + cnt + '</span>' : '') +
-           '</button>';
+function renderPresets(scenarios) {
+  const grid = document.getElementById('presetsGrid');
+  const videoUploaded = Object.keys(state.detectedClasses).length > 0;
+
+  grid.innerHTML = scenarios.map(s => {
+    const needs = SCENARIO_NEEDS[s.id] || [];
+    let relevant = false;
+    if (videoUploaded && needs.length > 0) {
+      relevant = needs.every(cls => state.detectedClasses[cls]);
+    }
+    const dimmed = videoUploaded && needs.length > 0 && !relevant;
+    const extraClass = dimmed ? 'dimmed' : (relevant ? 'relevant' : '');
+
+    return `<button class="scenario-btn ${extraClass}" id="preset-${s.id}" onclick="handlePresetClick(${JSON.stringify(s.query)})">
+      ${s.label}
+      <span class="preset-tooltip">${s.query}</span>
+    </button>`;
+  }).join('');
+}
+
+window.handlePresetClick = function(query) {
+  const input = document.getElementById('queryInput');
+  input.value = query;
+  performSearch(query);
+};
+
+// ═══════════════════════════════════════════════════════════════
+// QUICK CHIPS (top objects from ingestion)
+// ═══════════════════════════════════════════════════════════════
+function renderQuickChips(topClasses) {
+  const chips = document.getElementById('quickChips');
+  if (!chips || !topClasses || topClasses.length === 0) return;
+
+  const top5 = topClasses.slice(0, 5);
+  chips.innerHTML = top5.map(item => {
+    const cls = item.class || item.class_name || '';
+    const cnt = item.count || 0;
+    return `<button class="quick-chip" onclick="performSearch(${JSON.stringify(cls)})">
+      ${cls}<span class="quick-chip-count">· ${cnt}</span>
+    </button>`;
+  }).join('');
+
+  chips.style.display = 'flex';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FORMAT ELAPSED
+// ═══════════════════════════════════════════════════════════════
+function formatElapsed(ms) {
+  const totalSecs = Math.floor(ms / 1000);
+  const m = Math.floor(totalSecs / 60);
+  const s = totalSecs % 60;
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function formatElapsedSecs(secs) {
+  const totalSecs = Math.floor(secs);
+  const m = Math.floor(totalSecs / 60);
+  const s = totalSecs % 60;
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TOP OBJECTS RENDER
+// ═══════════════════════════════════════════════════════════════
+function renderTopObjects(topClasses) {
+  const grid = document.getElementById('topObjectsGrid');
+  const section = document.getElementById('topObjectsSection');
+  if (!grid || !topClasses || topClasses.length === 0) return;
+
+  // Store in state for preset filtering
+  state.detectedClasses = {};
+  topClasses.forEach(item => {
+    const cls = item.class || item.class_name || '';
+    state.detectedClasses[cls] = item.count || 0;
+  });
+
+  grid.innerHTML = topClasses.map(item => {
+    const cls = item.class || item.class_name || '';
+    const cnt = item.count || 0;
+    return `<div class="top-object-card">
+      <span class="top-object-name">${cls}</span>
+      <span class="top-object-sep">·</span>
+      <span class="top-object-count">${cnt}</span>
+    </div>`;
   }).join('');
 
   section.style.display = 'block';
 }
 
-
-
-
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-// UPLOAD ZONE — Real ingestion via /ingest/start + /ingest/status
-
-
+function renderIngestStats(stats) {
+  const el = document.getElementById('ingestStats');
+  if (!el || !stats) return;
+  const scenes = stats.scenes || stats.scene_count || 0;
+  const keyframes = stats.frames || stats.keyframes || stats.frame_count || 0;
+  const objects = stats.total_objects || stats.objects || stats.object_count || 0;
+  el.innerHTML = `<div class="stat-col"><div class="stat-label">Scenes</div><div class="stat-value">${scenes}</div></div><div class="stat-col"><div class="stat-label">Keyframes</div><div class="stat-value">${keyframes}</div></div><div class="stat-col"><div class="stat-label">Objects</div><div class="stat-value">${objects}</div></div>`;
+  el.style.display = 'grid';
+}
 
 // ═══════════════════════════════════════════════════════════════
+// UPLOAD ZONE INIT
 
-
-
+// ═══════════════════════════════════════════════════════════════
 function initUpload() {
-
-
-
   const zone = document.getElementById('uploadZone');
-
-
-
   const fileInput = document.getElementById('fileInput');
-
-
-
-  const progress = document.getElementById('uploadProgress');
-
-
-
-  const progressFill = document.getElementById('progressFill');
-
-
-
-  const progressLog = document.getElementById('progressLog');
-
-
-
-
-
-
 
   if (!zone) return;
 
-
-
-
-
-
-
-  // Glow on hover
-
-
-
+  // Mouse glow effect
   zone.addEventListener('mousemove', (e) => {
-
-
-
     const rect = zone.getBoundingClientRect();
-
-
-
-    zone.style.setProperty('--mouse-x', ((e.clientX - rect.left) / rect.width * 100) + '%');
-
-
-
-    zone.style.setProperty('--mouse-y', ((e.clientY - rect.top) / rect.height * 100) + '%');
-
-
-
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    zone.style.setProperty('--mouse-x', x + '%');
+    zone.style.setProperty('--mouse-y', y + '%');
   });
 
+  // Drag & Drop
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  });
 
-
-
-
-
-
-  // Drag & drop
-
-
-
-  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag-over'); });
-
-
-
-  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-
-
+  zone.addEventListener('dragleave', () => {
+    zone.classList.remove('drag-over');
+  });
 
   zone.addEventListener('drop', (e) => {
-
-
-
     e.preventDefault();
-
-
-
     zone.classList.remove('drag-over');
-
-
-
     const file = e.dataTransfer.files[0];
-
-
-
-    if (file && file.type.startsWith('video/')) handleUpload(file);
-
-
-
+    if (file && file.type.startsWith('video/')) {
+      handleUpload(file);
+    }
   });
 
-
-
-  zone.addEventListener('click', () => { if (!state.isUploading) fileInput.click(); });
-
-
-
-  fileInput.addEventListener('change', (e) => { if (e.target.files[0]) handleUpload(e.target.files[0]); });
-
-
-
-
-
-
-
-  async function handleUpload(file) {
-
-
-
-    if (state.isUploading) return;
-
-
-
-    state.isUploading = true;
-
-
-
-    zone.classList.add('uploading');
-
-
-
-    progress.classList.add('active');
-
-
-
-    progressLog.innerHTML = '';
-
-
-
-    progressFill.style.width = '0%';
-
-
-
-    document.getElementById('ingestStats').style.display = 'none';
-
-
-
-    document.getElementById('collectionBadge').style.display = 'none';
-
-
-
-    // TASK 2: Reset top objects + meta bar
-
-
-
-    document.getElementById('topObjectsSection').style.display = 'none';
-
-
-
-    document.getElementById('topObjectsGrid').innerHTML = '';
-
-
-
-    document.getElementById('ingestMetaBar').style.display = 'flex';
-
-
-
-    document.getElementById('ingestPct').textContent = '0%';
-
-
-
-    document.getElementById('ingestElapsed').textContent = 'Elapsed: 0:00';
-
-
-
-    document.getElementById('ingestPhaseLabel').textContent = 'Starting';
-
-
-
-    state._uploadStartTime = Date.now();
-
-
-
-
-
-
-
-    // Reset phase indicators
-
-
-
-    document.querySelectorAll('.phase').forEach(p => p.classList.remove('active', 'complete'));
-
-
-
-
-
-
-
-    addLog(`Uploading: ${file.name} (${(file.size / 1_048_576).toFixed(1)} MB)`, 'info');
-
-
-
-
-
-
-
-    // POST multipart upload
-
-
-
-    const formData = new FormData();
-
-
-
-    formData.append('video', file);
-
-
-
-
-
-
-
-    let jobId;
-
-
-
-    try {
-
-
-
-      const res = await fetch(`${API_BASE}/ingest/start`, {
-
-
-
-        method: 'POST',
-
-
-
-        body: formData,
-
-
-
-      });
-
-
-
-      if (!res.ok) {
-
-
-
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-
-
-
-        throw new Error(err.error || res.statusText);
-
-
-
-      }
-
-
-
-      const data = await res.json();
-
-
-
-      jobId = data.job_id;
-
-
-
-      state.currentJobId = jobId;
-
-
-
-      addLog(`Upload accepted - job ${jobId}`, 'pass');
-
-
-
-    } catch (err) {
-
-
-
-      addLog(`Upload failed: ${err.message}`, 'fail');
-
-
-
-      state.isUploading = false;
-
-
-
-      return;
-
-
-
-    }
-
-
-
-
-
-
-
-    // Poll /ingest/status/{job_id}
-
-
-
-    if (state.pollTimer) clearInterval(state.pollTimer);
-
-
-
-    state.pollTimer = setInterval(() => pollIngestionStatus(jobId), POLL_INTERVAL_MS);
-
-
-
-  }
-
-
-
-
-
-
-
-  function addLog(msg, type) {
-
-
-
-    // TASK 1: Colored terminal log lines
-
-
-
-    const div = document.createElement('div');
-
-
-
-    div.className = 'qlog-line ' + (type ? 'qlog-' + type : 'qlog-info');
-
-
-
-    const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-
-
-    div.textContent = '[' + ts + '] ' + msg;
-
-
-
-    progressLog.appendChild(div);
-
-
-
-    progressLog.scrollTop = progressLog.scrollHeight;
-
-
-
-  }
-
-
-
-
-
-
-
-  window._addIngestLog = addLog; // expose for pollIngestionStatus
-
-
-
+  zone.addEventListener('click', () => {
+    if (!state.isUploading) fileInput.click();
+  });
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) handleUpload(file);
+  });
 }
 
+// ═══════════════════════════════════════════════════════════════
+// HANDLE UPLOAD
+// ═══════════════════════════════════════════════════════════════
+async function handleUpload(file) {
+  state.isUploading = true;
+  state._uploadStartTime = Date.now();
 
+  const zone = document.getElementById('uploadZone');
+  const progress = document.getElementById('uploadProgress');
+  const progressFill = document.getElementById('progressFill');
+  const progressLog = document.getElementById('progressLog');
+  const metaBar = document.getElementById('ingestMetaBar');
+  const topSection = document.getElementById('topObjectsSection');
+  const topGrid = document.getElementById('topObjectsGrid');
+  const badge = document.getElementById('collectionBadge');
 
+  zone.classList.add('uploading');
+  progress.classList.add('active');
 
+  // Reset UI
+  progressFill.style.width = '0%';
+  progressLog.innerHTML = '';
+  if (topSection) topSection.style.display = 'none';
+  if (topGrid) topGrid.innerHTML = '';
+  if (metaBar) metaBar.style.display = 'flex';
+  if (badge) badge.style.display = 'none';
 
+  document.getElementById('ingestPct').textContent = '0%';
+  document.getElementById('ingestPhaseLabel').textContent = 'Queued';
+  document.getElementById('ingestElapsed').textContent = 'Elapsed: 0:00';
 
+  addProgressLog('Upload started: ' + file.name, 'qlog-info');
 
-// Phase name → data-phase attribute mapping
+  const formData = new FormData();
+  formData.append('video', file);
 
-
-
-const PHASE_ORDER = [
-
-
-
-  'scene_detection', 'extraction', 'detection', 'color', 'spatial', 'indexing', 'complete'
-
-
-
-];
-
-
-
-
-
-
-
-async function pollIngestionStatus(jobId) {
-
-
-
+  let jobId = null;
   try {
-
-
-
-    const res = await fetch(`${API_BASE}/ingest/status/${jobId}`);
-
-
-
-    if (!res.ok) {
-
-
-
-      if (res.status === 404) {
-
-
-
-        clearInterval(state.pollTimer);
-
-
-
-        window._addIngestLog('Job not found', 'fail');
-
-
-
-      }
-
-
-
-      return;
-
-
-
-    }
-
-
-
-    const job = await res.json();
-
-
-
-
-
-
-
-    // Update progress bar
-
-
-
-    const pct = job.progress || 0;
-
-
-
-    document.getElementById('progressFill').style.width = pct + '%';
-
-
-
-
-
-
-
-    // TASK 2: Meta bar - percentage, elapsed, phase label
-
-
-
-    document.getElementById('ingestPct').textContent = pct + '%';
-
-
-
-    if (state._uploadStartTime) {
-
-
-
-      const elapsedMs = Date.now() - state._uploadStartTime;
-
-
-
-      const elapsedSec = Math.floor(elapsedMs / 1000);
-
-
-
-      const mm = Math.floor(elapsedSec / 60);
-
-
-
-      const ss = String(elapsedSec % 60).padStart(2, '0');
-
-
-
-      document.getElementById('ingestElapsed').textContent = 'Elapsed: ' + mm + ':' + ss;
-
-
-
-    }
-
-
-
-    const phaseDisplayLabel = job.phase ? job.phase.replace(/_/g, ' ') : 'Processing';
-
-
-
-    document.getElementById('ingestPhaseLabel').textContent = phaseDisplayLabel;
-
-
-
-
-
-
-
-    // Update phase indicators
-
-
-
-    const phase = job.phase || '';
-
-
-
-    const phaseIdx = PHASE_ORDER.indexOf(phase);
-
-
-
-    document.querySelectorAll('.phase').forEach((el, idx) => {
-
-
-
-      el.classList.remove('active', 'complete');
-
-
-
-      if (phaseIdx >= 0) {
-
-
-
-        if (idx < phaseIdx) el.classList.add('complete');
-
-
-
-        else if (idx === phaseIdx) el.classList.add('active');
-
-
-
-      }
-
-
-
+    const res = await fetch(API_BASE + '/ingest/start', {
+      method: 'POST',
+      body: formData,
     });
-
-
-
-
-
-
-
-    // Log message
-
-
-
-    if (job.message) window._addIngestLog(`[${phase}] ${job.message}`, 'info');
-
-
-
-
-
-
-
-    // Show stats
-
-
-
-    if (job.stats && Object.keys(job.stats).length > 0) {
-
-
-
-      const statsEl = document.getElementById('ingestStats');
-
-
-
-      statsEl.style.display = 'block';
-
-
-
-      statsEl.innerHTML = `
-
-
-
-        <div class="stat-row"><span>Scenes:</span><span>${job.stats.scenes || 0}</span></div>
-
-
-
-        <div class="stat-row"><span>Keyframes:</span><span>${job.stats.keyframes || 0}</span></div>
-
-
-
-        <div class="stat-row"><span>Objects:</span><span>${job.stats.objects || 0}</span></div>
-
-
-
-      `;
-
-
-
-    }
-
-
-
-
-
-
-
-    // Complete
-
-
-
-    if (job.status === 'complete') {
-
-
-
-      clearInterval(state.pollTimer);
-
-
-
+    const data = await res.json();
+    if (data.error) {
+      addProgressLog('Error: ' + data.error, 'qlog-fail');
       state.isUploading = false;
-
-
-
-      state.collection = job.collection_name;
-
-
-
-      window._addIngestLog(`Ready - collection: ${job.collection_name}`, 'pass');
-
-
-
-
-
-
-
-      // Show collection badge
-
-
-
-      const badge = document.getElementById('collectionBadge');
-
-
-
-      badge.style.display = 'flex';
-
-
-
-      document.getElementById('collectionName').textContent = job.collection_name;
-
-
-
-
-
-
-
-      // TASK 3: Render top detected objects
-      state.detectedClasses = job.top_classes || [];
-      _renderTopObjects(state.detectedClasses);
-      // PROMPT 4: Refresh presets + quick chips with detected class info
-      refreshPresets(state.detectedClasses);
-
-
-
-
-
-
-
-      // Auto-scroll to search
-
-
-
-      setTimeout(() => {
-
-
-
-        document.getElementById('search').scrollIntoView({ behavior: 'smooth' });
-
-
-
-        document.getElementById('queryInput').focus();
-
-
-
-      }, 800);
-
-
-
-
-
-
-
-      // Refresh bridge status
-
-
-
-      checkBridgeHealth();
-
-
-
+      return;
     }
-
-
-
-
-
-
-
-    if (job.status === 'error') {
-
-
-
-      clearInterval(state.pollTimer);
-
-
-
-      state.isUploading = false;
-
-
-
-      window._addIngestLog(`Ingestion failed: ${job.message}`, 'fail');
-
-
-
-    }
-
-
-
-
-
-
-
-  } catch (err) {
-
-
-
-    // Network error during polling — don't stop, retry
-
-
-
-    console.warn('Polling error:', err);
-
-
-
-  }
-
-
-
-}
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-// SEARCH — Real backend call
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-
-
-
-
-// ---------------------------------------------------------------
-
-
-
-// TASK 3: Top Detected Objects Grid
-
-
-
-// ---------------------------------------------------------------
-
-
-
-function _renderTopObjects(topClasses) {
-
-
-
-  const section = document.getElementById('topObjectsSection');
-
-
-
-  const grid = document.getElementById('topObjectsGrid');
-
-
-
-  if (!topClasses || topClasses.length === 0) {
-
-
-
-    section.style.display = 'none';
-
-
-
+    jobId = data.job_id;
+    addProgressLog('Job started: ' + jobId, 'qlog-info');
+  } catch (e) {
+    addProgressLog('Upload failed: ' + e.message, 'qlog-fail');
+    state.isUploading = false;
     return;
-
-
-
   }
 
-
-
-  grid.innerHTML = topClasses.map(function(item) {
-
-
-
-    return '<div class="top-object-card">' +
-
-
-
-      '<span class="top-object-name">' + (item.class || String(item)) + '</span>' +
-
-
-
-      '<span class="top-object-sep">·</span>' +
-
-
-
-      '<span class="top-object-count">' + item.count + '</span>' +
-
-
-
-      '</div>';
-
-
-
-  }).join('');
-
-
-
-  section.style.display = 'block';
-
-
-
+  if (jobId) {
+    pollIngestionStatus(jobId);
+  }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// POLL INGESTION STATUS
+// ═══════════════════════════════════════════════════════════════
+function pollIngestionStatus(jobId) {
+  if (state._pollTimer) clearInterval(state._pollTimer);
 
+  state._pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(API_BASE + '/ingest/status/' + jobId);
+      const data = await res.json();
+      if (data.error) {
+        clearInterval(state._pollTimer);
+        addProgressLog('Poll error: ' + data.error, 'qlog-fail');
+        state.isUploading = false;
+        return;
+      }
 
+      const pct = data.progress || data.progress_pct || 0;
+      const phase = data.phase || 'queued';
+      const elapsed = data.elapsed_seconds || 0;
+      const msg = data.message || '';
 
+      // Update progress bar
+      document.getElementById('progressFill').style.width = pct + '%';
+      document.getElementById('ingestPct').textContent = pct + '%';
+      document.getElementById('ingestPhaseLabel').textContent = phase.replace(/_/g, ' ');
+      document.getElementById('ingestElapsed').textContent = 'Elapsed: ' + formatElapsedSecs(elapsed);
 
+      // Update phase dots
+      updatePhaseIndicators(phase);
 
+      // Add a log line when message changes
+      if (msg) {
+        const logClass = data.status === 'error' ? 'qlog-fail'
+          : (phase === 'complete' ? 'qlog-pass'
+          : (pct < 30 ? 'qlog-info' : (pct < 80 ? 'qlog-warn' : 'qlog-info')));
+        addProgressLog(msg, logClass);
+      }
 
+      // On complete
+      if (data.status === 'complete' || phase === 'complete') {
+        clearInterval(state._pollTimer);
+        state.isUploading = false;
+
+        const collName = data.collection_name || data.collection || '';
+        state.currentCollection = collName;
+        state.collection = collName;
+
+        addProgressLog('Ingestion complete!', 'qlog-pass');
+        document.getElementById('progressFill').style.width = '100%';
+        document.getElementById('ingestPct').textContent = '100%';
+
+        // Show collection badge
+        const badge = document.getElementById('collectionBadge');
+        const nameEl = document.getElementById('collectionName');
+        if (badge && nameEl) {
+          nameEl.textContent = collName || 'session_collection';
+          badge.style.display = 'flex';
+        }
+
+        // Render top objects
+        const topClasses = data.top_classes || [];
+        if (topClasses.length > 0) {
+          renderTopObjects(topClasses);
+          renderQuickChips(topClasses);
+        }
+        renderIngestStats(data.stats);
+
+        // Update preset relevance
+        const presetsGrid = document.getElementById('presetsGrid');
+        if (presetsGrid && presetsGrid.innerHTML) {
+          // Re-fetch scenarios and re-render with updated detectedClasses
+          try {
+            const sRes = await fetch(API_BASE + '/scenarios');
+            const scenarios = await sRes.json();
+            const list = Array.isArray(scenarios) ? scenarios : (scenarios.scenarios || []);
+            if (list.length > 0) renderPresets(list);
+          } catch (e) { /* non-fatal */ }
+        }
+
+        // Reveal search section
+        document.getElementById('search').scrollIntoView({ behavior: 'smooth' });
+      }
+
+      // On error
+      if (data.status === 'error') {
+        clearInterval(state._pollTimer);
+        state.isUploading = false;
+        addProgressLog('Ingestion error: ' + msg, 'qlog-fail');
+      }
+
+    } catch (e) {
+      // Network hiccup — keep polling
+      addProgressLog('Network error: ' + e.message, 'qlog-warn');
+    }
+  }, 800);
+}
+
+function addProgressLog(msg, cls) {
+  const log = document.getElementById('progressLog');
+  if (!log) return;
+  const div = document.createElement('div');
+  div.className = cls || '';
+  div.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function updatePhaseIndicators(currentPhase) {
+  const PHASE_ORDER = ['queued', 'starting', 'scene_detection', 'keyframe', 'yolo', 'color', 'spatial', 'qdrant', 'complete'];
+  const currentIdx = PHASE_ORDER.indexOf(currentPhase);
+
+  document.querySelectorAll('.phase').forEach((phaseEl, idx) => {
+    phaseEl.classList.remove('active', 'complete');
+    if (idx < currentIdx) phaseEl.classList.add('complete');
+    if (idx === currentIdx) phaseEl.classList.add('active');
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SEARCH
+// ═══════════════════════════════════════════════════════════════
 function initSearch() {
-
-
-
   const input = document.getElementById('queryInput');
-
-
-
   const btn = document.getElementById('searchBtn');
-
-
-
-
-
-
 
   if (!input) return;
 
-
-
-
-
-
+  // Suggestion chips
+  document.querySelectorAll('.suggestion-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      input.value = chip.dataset.query;
+      performSearch(chip.dataset.query);
+    });
+  });
 
   btn.addEventListener('click', () => {
-
-
-
-    if (input.value.trim()) performSearch(input.value.trim());
-
-
-
+    const q = input.value.trim();
+    if (q) performSearch(q);
   });
 
-
-
-
-
-
-
-  input.addEventListener('keydown', (e) => {
-
-
-
-    if (e.key === 'Enter' && input.value.trim()) performSearch(input.value.trim());
-
-
-
+  input.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && input.value.trim()) {
+      performSearch(input.value.trim());
+    }
   });
-
-
-
 }
 
-
-
-
-
-
-
-async function performSearch(query) {
-
-
+async function performSearch(query, skipHistory) {
+  query = (query || '').trim();
+  if (!query) return;
 
   state.currentQuery = query;
-
-
-
-
-
-
-
-  // Show loading state on button
-
-
-
+  const input = document.getElementById('queryInput');
   const btn = document.getElementById('searchBtn');
+  const warningsEl = document.getElementById('vocabWarnings');
 
+  if (input) input.value = query;
 
+  // Loading spinner
+  btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>`;
 
-  btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-
-
-
-    <circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20">
-
-
-
-      <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
-
-
-
-    </circle></svg>`;
-
-
-
-
-
-
-
-  // Show query log
-
-
-
-  const queryLog = document.getElementById('queryLog');
-
-
-
-  const queryLogInner = document.getElementById('queryLogInner');
-
-
-
-  queryLog.style.display = 'block';
-
-
-
-  queryLogInner.innerHTML = '';
-
-
-
-  addQueryLog('info', `⏳ Processing: "${query}"…`);
-
-
-
-
-
-
-
-  // Step 1: Vocab check (non-blocking)
-
-
-
+  // Vocab check
   try {
-
-
-
-    const vocabForm = new FormData();
-
-
-
-    vocabForm.append('query', query);
-
-
-
-    const vocabRes = await fetch(`${API_BASE}/vocab/check`, { method: 'POST', body: vocabForm });
-
-
-
-    const warnings = await vocabRes.json();
-
-
-
-    renderVocabWarnings(warnings);
-
-
-
-  } catch {
-
-
-
-    // Vocab check failure is non-fatal
-
-
-
+    const formData = new FormData();
+    formData.append('query', query);
+    const vRes = await fetch(API_BASE + '/vocab/check', { method: 'POST', body: formData });
+    const warnings = await vRes.json();
+    if (warnings && warnings.length > 0) {
+      warningsEl.innerHTML = warnings.map(w => {
+        if (w.type === 'suggestion' && w.suggestion) {
+          return `<p>&#9888;&#65039; "${w.token}" not in vocabulary. Did you mean: "${w.suggestion}"?</p>`;
+        }
+        return `<p>&#10060; "${w.token}" — unknown token</p>`;
+      }).join('');
+      warningsEl.classList.add('active');
+    } else {
+      warningsEl.classList.remove('active');
+      warningsEl.innerHTML = '';
+    }
+  } catch (e) {
+    warningsEl.classList.remove('active');
   }
 
-
-
-
-
-
-
-  // Step 2: Query
-
-
-
-  addQueryLog('info', `🔎 Searching Qdrant${state.collection ? ` (${state.collection})` : ''}…`);
-
-
-
-
-
-
-
+  // Query
   try {
+    const collection = state.currentCollection || state.collection || null;
+    const body = { query: query };
+    if (collection) body.collection_name = collection;
 
-
-
-    const res = await fetch(`${API_BASE}/query`, {
-
-
-
+    const res = await fetch(API_BASE + '/query', {
       method: 'POST',
-
-
-
       headers: { 'Content-Type': 'application/json' },
-
-
-
-      body: JSON.stringify({
-
-
-
-        query: query,
-
-
-
-        collection_name: state.collection,
-
-
-
-      }),
-
-
-
+      body: JSON.stringify(body),
     });
-
-
-
-
-
-
-
-    if (!res.ok) {
-
-
-
-      const err = await res.json().catch(() => ({ message: res.statusText }));
-
-
-
-      throw new Error(err.message || res.statusText);
-
-
-
-    }
-
-
-
-
-
-
-
     const data = await res.json();
 
+    const results = data.results || [];
+    state.currentResults = results;
+    state.results = results;
 
+    renderResults(data);
 
-
-
-
-
-    if (data.cached) {
-
-
-
-      addQueryLog('pass', '⚡ Result served from cache');
-
-
-
+    if (!skipHistory) {
+      const topScore = results.length > 0
+        ? (results[0].confidence_score || results[0].confidence || 0)
+        : 0;
+      addToHistory(query, results.length, topScore);
     }
 
-
-
-
-
-
-
-    addQueryLog(
-
-
-
-      data.status === 'match' ? 'pass' : 'fail',
-
-
-
-      data.status === 'match'
-
-
-
-        ? `✅ ${data.results.length} result(s) — best score ${(data.best_score || 0).toFixed(3)} ≥ threshold ${(data.threshold || 0.3197).toFixed(4)}`
-
-
-
-        : `🔴 No match — best score ${(data.best_score || 0).toFixed(3)} < threshold ${(data.threshold || 0.3197).toFixed(4)}`
-
-
-
-    );
-
-
-
-
-
-
-
-    state.results = data.results || [];
-
-
-
-    renderResults(data, query);
-
-
-
-    addToHistory(query, state.results.length, data.best_score || 0);
-
-
-
-
-
-
-
-  } catch (err) {
-
-
-
-    addQueryLog('fail', `❌ Search failed: ${err.message}`);
-
-
-
-    document.getElementById('diagnosisPanel').style.display = 'block';
-
-
-
-    document.getElementById('diagnosisPanel').innerHTML = `
-
-
-
-      <div style="padding:24px;color:rgba(255,255,255,0.5);">
-
-
-
-        <h3>Backend Error</h3>
-
-
-
-        <p style="margin-top:8px;font-size:0.9rem;">${err.message}</p>
-
-
-
-        <p style="margin-top:8px;font-size:0.8rem;">Is bridge_server.py running on port 8000?</p>
-
-
-
-      </div>`;
-
-
-
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+
+  } catch (e) {
+    const warEl = document.getElementById('vocabWarnings');
+    warEl.innerHTML = `<p style="color:#f87171;">Search failed: ${e.message}</p>`;
+    warEl.classList.add('active');
   }
 
-
-
-
-
-
-
-  // Restore search button
-
-
-
-  btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-
-
-
-    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>`;
-
-
-
-
-
-
-
-  // Scroll to results
-
-
-
-  document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
-
-
-
+  // Restore search icon
+  btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>`;
 }
 
-
-
-
-
-
-
-function addQueryLog(type, msg) {
-
-
-
-  const inner = document.getElementById('queryLogInner');
-
-
-
-  const div = document.createElement('div');
-
-
-
-  div.className = `qlog-line qlog-${type}`;
-
-
-
-  div.textContent = msg;
-
-
-
-  inner.appendChild(div);
-
-
-
-  inner.scrollTop = inner.scrollHeight;
-
-
-
-}
-
-
-
-
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
-// VOCAB WARNINGS RENDER
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-function renderVocabWarnings(warnings) {
-
-
-
-  const el = document.getElementById('vocabWarnings');
-
-
-
-  if (!warnings || warnings.length === 0) {
-
-
-
-    el.innerHTML = '';
-
-
-
-    el.classList.remove('active');
-
-
-
-    return;
-
-
-
-  }
-
-
-
-  const items = warnings.map(w => {
-
-
-
-    if (w.type === 'suggestion') {
-
-
-
-      return `<span class="vocab-warn-item">⚠️ "<strong>${w.token}</strong>" not in vocabulary — did you mean: "<em>${w.suggestion}</em>"?</span>`;
-
-
-
-    }
-
-
-
-    return `<span class="vocab-warn-item">⚠️ "<strong>${w.token}</strong>" not recognized — try a different term.</span>`;
-
-
-
-  });
-
-
-
-  el.innerHTML = items.join('');
-
-
-
-  el.classList.add('active');
-
-
-
-}
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
 // RENDER RESULTS
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
-function renderResults(data, query) {
-
-
+function renderResults(data) {
+  const results = data.results || [];
+  const parsed = data.parsed || null;
+  const diagnosis = data.diagnosis || null;
 
   const header = document.getElementById('resultsHeader');
-
-
-
   const countEl = document.getElementById('resultsCount');
-
-
-
   const queryEl = document.getElementById('resultsQuery');
-
-
-
   const grid = document.getElementById('resultsGrid');
-
-
-
-  const diagnosis = document.getElementById('diagnosisPanel');
-
-
-
+  const diagPanel = document.getElementById('diagnosisPanel');
   const videoArea = document.getElementById('videoPlayerArea');
-
-
-
-
-
-
+  const jumpSection = document.getElementById('jumpListSection');
 
   header.style.display = 'block';
+  countEl.textContent = results.length + ' Result' + (results.length !== 1 ? 's' : '');
+  queryEl.textContent = 'for "' + state.currentQuery + '"';
 
-
-
-  const results = data.results || [];
-
-
-
-  countEl.textContent = `${results.length} Result${results.length !== 1 ? 's' : ''}`;
-
-
-
-  queryEl.textContent = `for "${query}"`;
-
-
-
-
-
-
-
-  // No-match diagnosis
-
-
-
-  if (data.status === 'no_match' || results.length === 0) {
-
-
-
+  if (results.length === 0) {
     grid.innerHTML = '';
-
-
-
-    videoArea.style.display = 'none';
-
-
-
-
-
-
-
-    if (data.diagnosis && data.diagnosis.html) {
-
-
-
-      // Real diagnosis HTML from backend
-
-
-
-      diagnosis.style.display = 'block';
-
-
-
-      diagnosis.innerHTML = data.diagnosis.html;
-
-
-
+    if (diagnosis) {
+      renderDiagnosis(diagnosis);
     } else {
-
-
-
-      diagnosis.style.display = 'block';
-
-
-
-      diagnosis.innerHTML = `
-
-
-
-        <div class="no-match-inner">
-
-
-
-          <div class="no-match-icon">🔍</div>
-
-
-
-          <h3>No Confident Match</h3>
-
-
-
-          <p>We found related objects, but nothing matched all constraints together.</p>
-
-
-
-          <div class="diagnosis-score-bar">
-
-
-
-            <div class="bar-track">
-
-
-
-              <div class="bar-fill" style="width:${Math.round((data.best_score || 0) * 100)}%"></div>
-
-
-
-              <div class="bar-threshold" style="left:${Math.round((data.threshold || 0.3197) * 100)}%"></div>
-
-
-
-            </div>
-
-
-
-            <div class="bar-labels">
-
-
-
-              <span>0.0</span>
-
-
-
-              <span>Threshold: ${(data.threshold || 0.3197).toFixed(4)}</span>
-
-
-
-              <span>1.0</span>
-
-
-
-            </div>
-
-
-
-          </div>
-
-
-
-          <p class="no-match-tip">💡 Try broadening your query — remove one constraint at a time.</p>
-
-
-
-        </div>`;
-
-
-
+      diagPanel.style.display = 'block';
+      diagPanel.innerHTML = '<h3>No Confident Match</h3><p style="color:var(--color-text-muted);margin:16px 0;">No results matched your query constraints.</p>';
     }
-
-
-
+    videoArea.style.display = 'none';
+    if (jumpSection) jumpSection.style.display = 'none';
     return;
-
-
-
   }
 
-
-
-
-
-
-
-  diagnosis.style.display = 'none';
-
-
-
+  diagPanel.style.display = 'none';
   videoArea.style.display = 'block';
 
-
-
-
-
-
-
   grid.innerHTML = results.map((r, i) => {
-
-
-
-    const confClass = r.confidence_score >= 0.75 ? 'high' : r.confidence_score >= 0.5 ? 'medium' : 'low';
-
-
-
-    const confLabel = r.confidence_score >= 0.75 ? 'HIGH' : r.confidence_score >= 0.5 ? 'MED' : 'LOW';
-
-
-
-
-
-
-
-    // BBox overlays
-
-
-
-    let bboxHtml = '';
-
-
-
-    (r.matched_objects || []).forEach((obj, idx) => {
-
-
-
-      const bx = obj.bbox || [0.1 + idx * 0.25, 0.1, 0.3 + idx * 0.25, 0.5];
-
-
-
-      bboxHtml += `<div class="bbox-box" style="left:${bx[0]*100}%;top:${bx[1]*100}%;width:${(bx[2]-bx[0])*100}%;height:${(bx[3]-bx[1])*100}%">
-
-
-
-        <span class="bbox-label">${obj.class_name || '?'}${obj.color ? ' / ' + obj.color : ''}</span></div>`;
-
-
-
-    });
-
-
-
-
-
-
-
-    // Smart Score Bars (Task 7)
-
-
-
-    const scoreBarsHtml = renderScoreBars(r.score_breakdown, data.parsed);
-
-
-
-
-
-
-
-    return `
-
-
-
-      <div class="result-card" id="result-card-${i}" onclick="playResult(${i})" style="opacity:0;animation:fade-in 0.5s ease ${i*0.1}s forwards">
-
-
-
-        <div class="result-card-visual">
-
-
-
-          <div class="result-frame-placeholder">
-
-              <div class="ts-visual">
-
-                <span class="ts-time">${r.timestamp.toFixed(1)}s</span>
-
-                <span class="ts-label">Timestamp</span>
-
-                <span class="ts-click-hint">Click to play clip</span>
-
-                <span class="ts-scene">Scene ${r.scene_id}</span>
-
-              </div>
-
-
-
-            <div class="bbox-overlay">${bboxHtml}</div>
-
-
-
-          </div>
-
-
-
+    const score = r.confidence_score || r.confidence || 0;
+    const confClass = score >= 0.75 ? 'high' : score >= 0.5 ? 'medium' : 'low';
+    const confLabel = score >= 0.75 ? 'HIGH' : score >= 0.5 ? 'MED' : 'LOW';
+    const ts = typeof r.timestamp === 'number' ? r.timestamp : 0;
+    const sb = r.score_breakdown || null;
+
+    return `<div class="result-card" onclick="playResult(${i})" style="opacity:0;animation:fade-in 0.5s ease ${i * 0.1}s forwards">
+      <div class="ts-visual" onclick="playResult(${i})">
+        <div class="ts-time">${ts.toFixed(1)}s</div>
+        <div class="ts-label">Timestamp</div>
+        <div class="ts-scene">Scene ${r.scene_id || i + 1}</div>
+        <div class="ts-click-hint">Click to play clip</div>
+      </div>
+      <div class="result-card-body">
+        <div class="result-card-header">
+          <span class="result-video-id">${r.video_id || 'unknown'}</span>
+          <span class="result-confidence ${confClass}">${confLabel} ${score.toFixed(2)}</span>
         </div>
-
-
-
-        <div class="result-card-body">
-
-
-
-          <div class="result-card-header">
-
-
-
-            <span class="result-video-id">📹 ${r.video_id}</span>
-
-
-
-            <span class="result-confidence ${confClass}">${confLabel} ${r.confidence_score.toFixed(3)}</span>
-
-
-
-          </div>
-
-
-
-          <div class="result-meta">
-
-
-
-            <span>⏱ ${r.timestamp.toFixed(1)}s</span>
-
-
-
-            <span>·</span>
-
-
-
-            <span>Scene ${r.scene_id}</span>
-
-
-
-            <span>·</span>
-
-
-
-            <span>${(r.matched_objects || []).length} object(s)</span>
-
-
-
-          </div>
-
-
-
-          <p class="result-explanation">💡 ${r.explanation || ''}</p>
-
-
-
-          ${scoreBarsHtml}
-
-
-
-          <p class="result-hint">Click to seek video ↓</p>
-
-
-
-        </div>
-
-
-
-      </div>`;
-
-
-
+        <p class="result-explanation">${r.explanation || ''}</p>
+        ${sb ? renderScoreBars(sb, parsed) : ''}
+      </div>
+    </div>`;
   }).join('');
 
-
-
-
-
-
-
-    // Populate hidden select (backward compat)
-
+  // Populate picker
   const picker = document.getElementById('resultPicker');
+  picker.innerHTML = '<option value="">Jump to result...</option>' +
+    results.map((r, i) => {
+      const ts = typeof r.timestamp === 'number' ? r.timestamp : 0;
+      const score = r.confidence_score || r.confidence || 0;
+      return `<option value="${i}">${r.video_id || 'result'} @ ${ts.toFixed(1)}s [${score.toFixed(2)}]</option>`;
+    }).join('');
 
-  if (picker) {
-
-    picker.innerHTML = '<option value="">Jump to result</option>' +
-
-      results.map((r, i) =>
-
-        `<option value="${i}">${r.video_id} @ ${r.timestamp.toFixed(1)}s [${r.confidence_score.toFixed(3)}]</option>`
-
-      ).join('');
-
-  }
-
-
-
-  // Show player area when results exist (so jump list is visible)
-
-  if (results.length > 0) {
-
-    document.getElementById('videoPlayerArea').style.display = 'block';
-
-  }
-
-
-
-  // Task 4: Build styled jump list
-
-  const jumpList = document.getElementById('resultJumpList');
-
-  const jumpHeader = document.getElementById('jumpListHeader');
-
-  const jumpCount = document.getElementById('jumpListCount');
-
-  if (jumpList) {
-
-    if (results.length > 0) {
-
-      jumpHeader.style.display = 'flex';
-
-      jumpCount.textContent = results.length + ' result' + (results.length !== 1 ? 's' : '');
-
-      jumpList.innerHTML = results.map((r, i) => `
-
-        <div class="result-jump-item" id="jump-item-${i}" onclick="playResult(${i})">
-
-          <span class="jump-index">${i + 1}</span>
-
-          <span class="jump-vid">${r.video_id}</span>
-
-          <span class="jump-ts">${r.timestamp.toFixed(1)}s</span>
-
-          <span class="jump-score">${r.confidence_score.toFixed(3)}</span>
-
-        </div>`).join('');
-
-    } else {
-
-      jumpHeader.style.display = 'none';
-
-      jumpList.innerHTML = '';
-
-    }
-
-  }
-
+  // Jump list
+  renderJumpList();
 }
 
-
-
-// Task 4: Highlight active jump item
-
-function _highlightJumpItem(idx) {
-
-  document.querySelectorAll('.result-jump-item').forEach((el, i) => {
-
-    el.classList.toggle('active', i === idx);
-
-  });
-
-}
-
-
-
-
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
-// SMART SCORE BARS (Task 7)
-
-
-
-// Categories: Object 0-40, Color 0-20, Spatial 0-20, Negation 0-20
-
-
-
-// Gold fill (#c9a96e) exactly matching CSS --color-accent
-
-
-
+// RENDER SCORE BARS
 // ═══════════════════════════════════════════════════════════════
-
-
-
 function renderScoreBars(sb, parsed) {
+  const filters = (parsed && parsed.filters) ? parsed.filters : null;
 
-  if (!sb) return '';
-
-
-
-  // Task 3: derive constraint presence from parsed filters
-
-  const filters = (parsed && parsed.filters) ? parsed.filters : {};
-
-  const hasColor    = !!(filters.color    && filters.color    !== null);
-
-  const hasSpatial  = !!(filters.spatial_relation && filters.spatial_relation !== null);
-
-  const hasNegation = !!(filters.negated  && filters.negated  !== null && filters.negated !== false);
-
-
-
-  function noteFor(cat, val) {
-
-    if (val > 0) return '';
-
-    switch (cat) {
-
-      case 'Color':
-
-        return hasColor    ? '<span class="score-bar-note">Not detected</span>'
-
-                           : '<span class="score-bar-note">No color constraint</span>';
-
-      case 'Spatial':
-
-        return hasSpatial  ? '<span class="score-bar-note">Not detected</span>'
-
-                           : '<span class="score-bar-note">No spatial constraint</span>';
-
-      case 'Negation':
-
-        return hasNegation ? '<span class="score-bar-note">Not detected</span>'
-
-                           : '<span class="score-bar-note">No negation constraint</span>';
-
-      default: return '';
-
+  function getMicroLabel(category, score) {
+    if (!filters) return '';
+    if (category === 'color') {
+      if (filters.color === null || filters.color === undefined) return 'No color constraint';
+      if (score === 0) return 'Not detected';
     }
-
+    if (category === 'spatial') {
+      if (filters.spatial_relation === null || filters.spatial_relation === undefined) return 'No spatial constraint';
+      if (score === 0) return 'Not detected';
+    }
+    if (category === 'negation') {
+      const neg = filters.negated;
+      if (!neg || neg.length === 0) return 'No negation constraint';
+      if (score === 0) return 'Not detected';
+    }
+    return '';
   }
 
-
-
-  const cats = [
-
-    { name: 'Object',   val: sb.object_score   || 0, max: 40 },
-
-    { name: 'Color',    val: sb.color_score    || 0, max: 20 },
-
-    { name: 'Spatial',  val: sb.spatial_score  || 0, max: 20 },
-
-    { name: 'Negation', val: sb.negation_score || 0, max: 20 },
-
+  const bars = [
+    { label: 'Object',   score: sb.object_score || 0,   max: 40, category: 'object' },
+    { label: 'Color',    score: sb.color_score || 0,    max: 20, category: 'color' },
+    { label: 'Spatial',  score: sb.spatial_score || 0,  max: 20, category: 'spatial' },
+    { label: 'Negation', score: sb.negation_score || 0, max: 20, category: 'negation' },
   ];
 
+  const total = sb.total || 0;
 
+  let html = '<div class="score-bars" style="margin-top:12px;border-top:1px solid var(--color-border);padding-top:12px;">';
 
-  const bars = cats.map(c => {
-
-    const pct = Math.round((c.val / c.max) * 100);
-
-    const note = noteFor(c.name, c.val);
-
-    return `
-
-      <div class="score-bar-row">
-
-        <span class="score-bar-label">${c.name}</span>
-
-        <div class="score-bar-track">
-
-          <div class="score-bar-fill" style="width:${pct}%"></div>
-
-        </div>
-
-        <span class="score-bar-value">${c.val}/${c.max}${note}</span>
-
-      </div>`;
-
-  }).join('');
-
-
-
-  return `
-
-    <div class="score-breakdown">
-
-      <div class="score-breakdown-title">Score Breakdown</div>
-
-      ${bars}
-
-      <div class="score-total">Total: <strong>${sb.total || 0}</strong>/100</div>
-
+  bars.forEach(b => {
+    const pct = Math.min(100, Math.round((b.score / b.max) * 100));
+    const note = getMicroLabel(b.category, b.score);
+    html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <span style="font-family:var(--font-mono);font-size:0.6rem;color:var(--color-text-dim);min-width:52px;">${b.label}</span>
+      <div style="flex:1;height:3px;background:rgba(255,255,255,0.06);">
+        <div style="height:100%;width:${pct}%;background:#c4b8a5;transition:width 0.8s ease;"></div>
+      </div>
+      <span style="font-family:var(--font-mono);font-size:0.6rem;color:var(--color-accent);min-width:20px;text-align:right;">${b.score}</span>
+      ${note ? `<span class="score-bar-note">${note}</span>` : ''}
     </div>`;
+  });
 
+  html += `<div style="display:flex;align-items:center;gap:8px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.04);padding-top:6px;">
+    <span style="font-family:var(--font-mono);font-size:0.6rem;color:var(--color-accent);min-width:52px;">Total</span>
+    <div style="flex:1;height:3px;background:rgba(255,255,255,0.06);">
+      <div style="height:100%;width:${Math.min(100, total)}%;background:var(--color-accent);transition:width 0.8s ease;"></div>
+    </div>
+    <span style="font-family:var(--font-mono);font-size:0.65rem;color:var(--color-accent);font-weight:500;min-width:20px;text-align:right;">${total}</span>
+  </div>`;
+
+  html += '</div>';
+  return html;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// RENDER JUMP LIST
+// ═══════════════════════════════════════════════════════════════
+function renderJumpList() {
+  const section = document.getElementById('jumpListSection');
+  const list = document.getElementById('resultJumpList');
+  if (!section || !list) return;
 
+  const results = state.currentResults;
+  if (!results || results.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
 
-
-
-
-
-
+  section.style.display = 'block';
+  list.innerHTML = results.map((r, i) => {
+    const ts = typeof r.timestamp === 'number' ? r.timestamp : 0;
+    const score = r.confidence_score || r.confidence || 0;
+    const total = (r.score_breakdown && r.score_breakdown.total) || 0;
+    return `<div class="result-jump-item" id="jump-item-${i}" onclick="playResult(${i})">
+      <span class="jump-index">${i + 1}</span>
+      <span class="jump-vid">${r.video_id || 'result'}</span>
+      <span class="jump-ts">${ts.toFixed(1)}s</span>
+      <span class="jump-score">${total ? 'score ' + total : score.toFixed(2)}</span>
+    </div>`;
+  }).join('');
+}
 
 // ═══════════════════════════════════════════════════════════════
+// RENDER DIAGNOSIS
+// ═══════════════════════════════════════════════════════════════
+function renderDiagnosis(diagnosis) {
+  const panel = document.getElementById('diagnosisPanel');
+  panel.style.display = 'block';
 
-
-
-// VIDEO PLAYER & SEEK (Task 10)
-
-
+  if (diagnosis && diagnosis.html) {
+    panel.innerHTML = `<h3>No Confident Match</h3><div style="margin-top:16px;">${diagnosis.html}</div>`;
+  } else {
+    panel.innerHTML = `<h3>No Confident Match</h3>
+      <p style="color:var(--color-text-muted);margin:16px 0;">We found related objects, but nothing matched all constraints together.</p>
+      <div style="margin-top:16px;padding:16px;background:rgba(255,255,255,0.02);border:1px solid var(--color-border);">
+        <p style="font-size:0.8rem;color:var(--color-text-muted);"><strong style="color:var(--color-text);">Tip:</strong> Try removing one constraint at a time. Search for just "person" or just "helmet" to see what exists.</p>
+      </div>`;
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
-
-
-
+// VIDEO PLAYER
+// ═══════════════════════════════════════════════════════════════
 function initVideoPlayer() {
-
-
-
   const picker = document.getElementById('resultPicker');
-
-
-
   const video = document.getElementById('mainVideo');
-
-
-
   const timeEl = document.getElementById('playerTime');
-
-
-
-
-
-
+  const playClipBtn = document.getElementById('playClipBtn');
 
   if (!picker) return;
 
-
-
-
-
-
-
   picker.addEventListener('change', (e) => {
-
-
-
     const idx = parseInt(e.target.value);
-
-
-
-    if (!isNaN(idx) && state.results[idx]) playResult(idx);
-
-
-
+    if (!isNaN(idx) && state.currentResults[idx]) {
+      playResult(idx);
+    }
   });
-
-
-
-
-
-
 
   video.addEventListener('timeupdate', () => {
+    const mins = Math.floor(video.currentTime / 60);
+    const secs = Math.floor(video.currentTime % 60);
+    const ms = Math.floor((video.currentTime % 1) * 100);
+    timeEl.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0') + '.' + String(ms).padStart(2, '0');
 
-
-
-    const t = video.currentTime;
-
-
-
-    const mins = Math.floor(t / 60);
-
-
-
-    const secs = Math.floor(t % 60);
-
-
-
-    const ms = Math.floor((t % 1) * 100);
-
-
-
-    timeEl.textContent = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'00')}.${String(ms).padStart(2,'0')}`;
-
-    // Task 2: Auto-pause at clip end (timestamp + 3s)
-
-    if (state.clipEnd !== undefined && t >= state.clipEnd) {
-
+    // Clip end enforcement
+    if (state.currentClipEnd !== null && video.currentTime >= state.currentClipEnd) {
       video.pause();
-
     }
-
   });
 
-
-
+  if (playClipBtn) {
+    playClipBtn.addEventListener('click', replayClip);
+  }
 }
 
-
-
-
-
-
-
 window.playResult = function(idx) {
-
   const video = document.getElementById('mainVideo');
-
   const picker = document.getElementById('resultPicker');
-
-  const result = state.results[idx];
+  const clipControls = document.getElementById('clipControls');
+  const clipInfo = document.getElementById('clipInfo');
+  const result = state.currentResults[idx];
 
   if (!result) return;
 
+  const ts = typeof result.timestamp === 'number' ? result.timestamp : 0;
+  const clipStart = Math.max(0, ts - 3);
+  const clipEnd = ts + 3;
+  state.currentClipEnd = clipEnd;
 
+  const videoId = result.video_id || '';
+  const src = API_BASE + '/video/' + videoId;
 
-  // Task 2: Track clip window for auto-pause
-
-  state.clipStart = Math.max(0, result.timestamp - 3);
-
-  state.clipEnd   = result.timestamp + 3;
-
-  state.activeResultIdx = idx;
-
-
-
-  // Update clip info display
-
-  const clipInfo = document.getElementById('clipInfo');
-
-  if (clipInfo) {
-
-    clipInfo.textContent = result.timestamp.toFixed(1) + 's  (− 3s to + 3s)';
-
+  if (video.src !== src) {
+    video.src = src;
   }
 
-  document.getElementById('clipControls').style.display = 'flex';
-
-
-
-  // Set video source (only reload if different video)
-
-  const newSrc = API_BASE + '/video/' + encodeURIComponent(result.video_id);
-
-  if (video.dataset.videoId !== result.video_id) {
-
-    video.src = newSrc;
-
-    video.dataset.videoId = result.video_id;
-
-    video.load();
-
-    // Seek after metadata is loaded
-
-    video.addEventListener('loadedmetadata', function _seekOnLoad() {
-
-      video.removeEventListener('loadedmetadata', _seekOnLoad);
-
-      video.currentTime = state.clipStart;
-
-      video.play().catch(() => {});
-
-    });
-
-  } else {
-
-    // Same video, just re-seek
-
-    video.currentTime = state.clipStart;
-
+  video.addEventListener('loadedmetadata', function onMeta() {
+    video.removeEventListener('loadedmetadata', onMeta);
+    video.currentTime = clipStart;
     video.play().catch(() => {});
+  }, { once: true });
 
+  if (video.readyState >= 1) {
+    video.currentTime = clipStart;
+    video.play().catch(() => {});
   }
 
-
-
-  // Sync picker + jump list active state
-
-  if (picker) picker.value = String(idx);
-
-  _highlightJumpItem(idx);
-
-
-
-  // Show player area
-
-  const area = document.getElementById('videoPlayerArea');
-
-  area.style.display = 'block';
-
-  area.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-};
-
-
-
-// Task 2: replayClip — re-seeks to t-3 and plays
-
-window.replayClip = function() {
-
-  const video = document.getElementById('mainVideo');
-
-  if (!video || state.clipStart === undefined) return;
-
-  video.currentTime = state.clipStart;
-
-  video.play().catch(() => {});
-
-};
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-// QUERY HISTORY (Task 9)
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-function initHistory() {
-
-
-
-  const sidebar = document.getElementById('historySidebar');
-
-
-
-  const toggle = document.getElementById('historyToggle');
-
-
-
-  const close = document.getElementById('closeHistory');
-
-
-
-
-
-
-
-  toggle.addEventListener('click', () => sidebar.classList.add('open'));
-
-
-
-  close.addEventListener('click', () => sidebar.classList.remove('open'));
-
-
-
-
-
-
-
-  document.addEventListener('click', (e) => {
-
-
-
-    if (!sidebar.contains(e.target) && !toggle.contains(e.target)) {
-
-
-
-      sidebar.classList.remove('open');
-
-
-
-    }
-
-
-
+  // Clip controls
+  if (clipControls) clipControls.style.display = 'flex';
+  if (clipInfo) clipInfo.textContent = ts.toFixed(1) + 's (\u22123s to +3s)';
+
+  // Picker sync
+  picker.value = String(idx);
+
+  // Highlight jump list
+  document.querySelectorAll('.result-jump-item').forEach((el, i) => {
+    el.classList.toggle('active', i === idx);
   });
 
-
-
-}
-
-
-
-
-
-
-
-function addToHistory(query, count, topScore) {
-
-
-
-  const item = { query, count, time: new Date().toLocaleTimeString(), topScore };
-
-
-
-  state.history.unshift(item);
-
-
-
-
-
-
-
-  // Update counter badge
-
-
-
-  const countEl = document.getElementById('historyCount');
-
-
-
-  countEl.textContent = state.history.length;
-
-
-
-  countEl.style.display = 'inline-block';
-
-
-
-
-
-
-
-  renderHistory();
-
-
-
-}
-
-
-
-
-
-
-
-function renderHistory() {
-
-
-
-  const list = document.getElementById('historyList');
-
-
-
-  if (state.history.length === 0) {
-
-
-
-    list.innerHTML = `<div style="color:rgba(255,255,255,0.3);font-size:0.85rem;padding:16px;font-style:italic;">No queries yet.</div>`;
-
-
-
-    return;
-
-
-
-  }
-
-
-
-  list.innerHTML = state.history.map((h, i) => `
-
-
-
-    <div class="history-item" onclick="replayQuery(${i})">
-
-
-
-      <div class="history-item-query">${escapeHtml(h.query)}</div>
-
-
-
-      <div class="history-item-meta">
-
-
-
-        <span>${h.time}</span>
-
-
-
-        <span>${h.count} result${h.count !== 1 ? 's' : ''}</span>
-
-
-
-        <span>score: ${h.topScore.toFixed(3)}</span>
-
-
-
-      </div>
-
-
-
-    </div>`).join('');
-
-
-
-}
-
-
-
-
-
-
-
-window.replayQuery = function(idx) {
-
-
-
-  const item = state.history[idx];
-
-
-
-  if (!item) return;
-
-
-
-  const input = document.getElementById('queryInput');
-
-
-
-  input.value = item.query;
-
-
-
-  document.getElementById('historySidebar').classList.remove('open');
-
-
-
-  // QueryCache will serve this instantly if it was cached
-
-
-
-  performSearch(item.query);
-
-
-
-  document.getElementById('search').scrollIntoView({ behavior: 'smooth' });
-
-
-
+  document.getElementById('videoPlayerArea').scrollIntoView({ behavior: 'smooth', block: 'center' });
 };
 
-
-
-
-
-
-
-function escapeHtml(str) {
-
-
-
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-
-
+function replayClip() {
+  const video = document.getElementById('mainVideo');
+  if (!video || state.currentClipEnd === null) return;
+  const clipStart = Math.max(0, state.currentClipEnd - 6);
+  video.currentTime = clipStart;
+  video.play().catch(() => {});
 }
 
+// ═══════════════════════════════════════════════════════════════
+// HISTORY SIDEBAR
+// ═══════════════════════════════════════════════════════════════
+function initHistory() {
+  const sidebar = document.getElementById('historySidebar');
+  const toggle = document.getElementById('historyToggle');
+  const close = document.getElementById('closeHistory');
 
+  toggle.addEventListener('click', () => sidebar.classList.add('open'));
+  close.addEventListener('click', () => sidebar.classList.remove('open'));
 
+  document.addEventListener('click', (e) => {
+    if (!sidebar.contains(e.target) && !toggle.contains(e.target)) {
+      sidebar.classList.remove('open');
+    }
+  });
+}
 
+function addToHistory(query, count, topScore) {
+  const item = {
+    query,
+    count,
+    time: new Date().toLocaleTimeString(),
+    topScore: topScore || 0,
+  };
+  state.history.unshift(item);
+  renderHistory();
+}
 
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  list.innerHTML = state.history.map((h) => {
+    const safeQ = h.query.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return `<div class="history-item" onclick="replayQuery('${safeQ}')">
+      <div class="history-item-query">${h.query}</div>
+      <div class="history-item-meta">
+        <span>${h.time}</span>
+        <span>${h.count} results</span>
+        <span>score: ${h.topScore.toFixed(2)}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
 
+window.replayQuery = function(query) {
+  document.getElementById('queryInput').value = query;
+  document.getElementById('historySidebar').classList.remove('open');
+  performSearch(query, true);
+};
 
 // ═══════════════════════════════════════════════════════════════
-
-
-
-// INTERACTIVE HOLD & MOVE
-
-
-
+// HOLD & MOVE (Interactive Track)
 // ═══════════════════════════════════════════════════════════════
-
-
-
 function initInteractiveTrack() {
-
-
-
   const area = document.getElementById('interactiveArea');
-
-
-
   const track = document.getElementById('interactiveTrack');
-
-
 
   if (!area || !track) return;
 
-
-
-
-
-
-
-  let isDown = false, startX, scrollLeft, velocity = 0, rafId = null;
-
-
-
-
-
-
+  let isDown = false;
+  let startX;
+  let scrollLeft;
+  let velocity = 0;
+  let rafId = null;
 
   area.addEventListener('mousedown', (e) => {
-
-
-
     isDown = true;
-
-
-
     area.style.cursor = 'grabbing';
-
-
-
     startX = e.pageX - area.offsetLeft;
-
-
-
     scrollLeft = getTranslateX(track);
-
-
-
     cancelAnimationFrame(rafId);
-
-
-
   });
 
+  area.addEventListener('mouseleave', () => {
+    isDown = false;
+    area.style.cursor = 'grab';
+    applyMomentum();
+  });
 
-
-
-
-
-
-  area.addEventListener('mouseleave', () => { isDown = false; area.style.cursor = 'grab'; applyMomentum(); });
-
-
-
-  area.addEventListener('mouseup', () => { isDown = false; area.style.cursor = 'grab'; applyMomentum(); });
-
-
-
-
-
-
+  area.addEventListener('mouseup', () => {
+    isDown = false;
+    area.style.cursor = 'grab';
+    applyMomentum();
+  });
 
   area.addEventListener('mousemove', (e) => {
-
-
-
     if (!isDown) return;
-
-
-
     e.preventDefault();
-
-
-
     const x = e.pageX - area.offsetLeft;
-
-
-
     const walk = (x - startX) * 1.5;
-
-
-
     velocity = walk - (getTranslateX(track) - scrollLeft);
-
-
-
     track.style.transform = `translateX(${scrollLeft + walk}px)`;
-
-
-
   });
-
-
-
-
-
-
 
   area.addEventListener('touchstart', (e) => {
-
-
-
     isDown = true;
-
-
-
     startX = e.touches[0].pageX - area.offsetLeft;
-
-
-
     scrollLeft = getTranslateX(track);
-
-
-
     cancelAnimationFrame(rafId);
-
-
-
   }, { passive: true });
 
-
-
-
-
-
-
-  area.addEventListener('touchend', () => { isDown = false; applyMomentum(); });
-
-
-
-  area.addEventListener('touchmove', (e) => {
-
-
-
-    if (!isDown) return;
-
-
-
-    const x = e.touches[0].pageX - area.offsetLeft;
-
-
-
-    const walk = (x - startX) * 1.5;
-
-
-
-    velocity = walk - (getTranslateX(track) - scrollLeft);
-
-
-
-    track.style.transform = `translateX(${scrollLeft + walk}px)`;
-
-
-
-  }, { passive: true });
-
-
-
-
-
-
-
-  function getTranslateX(el) {
-
-
-
-    const matrix = new WebKitCSSMatrix(window.getComputedStyle(el).transform);
-
-
-
-    return matrix.m41;
-
-
-
-  }
-
-
-
-
-
-
-
-  function applyMomentum() {
-
-
-
-    const current = getTranslateX(track);
-
-
-
-    const newX = current + velocity * 2;
-
-
-
-    const minScroll = -(track.scrollWidth - area.clientWidth);
-
-
-
-    const target = Math.max(minScroll, Math.min(0, newX));
-
-
-
-    track.style.transition = 'transform 0.8s cubic-bezier(0.22, 1, 0.36, 1)';
-
-
-
-    track.style.transform = `translateX(${target}px)`;
-
-
-
-    setTimeout(() => { track.style.transition = 'transform 0.1s ease-out'; }, 800);
-
-
-
-  }
-
-
-
-}
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-// SMOOTH SCROLL FOR NAV LINKS
-
-
-
-// ═══════════════════════════════════════════════════════════════
-
-
-
-function initSmoothScroll() {
-
-
-
-  document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-
-
-
-    anchor.addEventListener('click', function(e) {
-
-
-
-      e.preventDefault();
-
-
-
-      const target = document.querySelector(this.getAttribute('href'));
-
-
-
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-
-
-    });
-
-
-
+  area.addEventListener('touchend', () => {
+    isDown = false;
+    applyMomentum();
   });
 
+  area.addEventListener('touchmove', (e) => {
+    if (!isDown) return;
+    const x = e.touches[0].pageX - area.offsetLeft;
+    const walk = (x - startX) * 1.5;
+    velocity = walk - (getTranslateX(track) - scrollLeft);
+    track.style.transform = `translateX(${scrollLeft + walk}px)`;
+  }, { passive: true });
 
+  function getTranslateX(el) {
+    const style = window.getComputedStyle(el);
+    const matrix = new WebKitCSSMatrix(style.transform);
+    return matrix.m41;
+  }
 
+  function applyMomentum() {
+    const current = getTranslateX(track);
+    const newX = current + velocity * 2;
+    const maxScroll = 0;
+    const minScroll = -(track.scrollWidth - area.clientWidth);
+    const target = Math.max(minScroll, Math.min(maxScroll, newX));
+
+    track.style.transition = 'transform 0.8s cubic-bezier(0.22, 1, 0.36, 1)';
+    track.style.transform = `translateX(${target}px)`;
+
+    setTimeout(() => {
+      track.style.transition = 'transform 0.1s ease-out';
+    }, 800);
+  }
 }
 
-
-
-
-
-
+// ═══════════════════════════════════════════════════════════════
+// SMOOTH SCROLL
+// ═══════════════════════════════════════════════════════════════
+function initSmoothScroll() {
+  document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function(e) {
+      e.preventDefault();
+      const target = document.querySelector(this.getAttribute('href'));
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+}
 
 // ═══════════════════════════════════════════════════════════════
-
-
-
 // INITIALIZE
-
-
-
 // ═══════════════════════════════════════════════════════════════
-
-
-
-document.addEventListener('DOMContentLoaded', async () => {
-
-
-
+document.addEventListener('DOMContentLoaded', () => {
   initParticles();
-
-
-
   initScrollReveal();
-
-
-
   initNavScroll();
-
-
-
   initUpload();
-
-
-
   initSearch();
-
-
-
   initVideoPlayer();
-
-
-
   initHistory();
-
-
-
   initInteractiveTrack();
-
-
-
   initSmoothScroll();
+  checkBackend();
 
-
-
-
-
-
-
-  // Async: health check + load scenarios
-
-
-
-  await checkBridgeHealth();
-
-
-
-  await loadScenarios();
-
-
-
-
-
-
-
-  console.log('Ask-N-Seek v2.4 — Real Backend Wired ✅');
-
-
-
+  console.log('Ask-N-Seek v2.4 — Ready');
 });
-
-
-

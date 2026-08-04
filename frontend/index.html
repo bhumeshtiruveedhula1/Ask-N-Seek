@@ -1,414 +1,389 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ask-N-Seek — Natural Language Video Retrieval</title>
-  <meta name="description" content="Ask-N-Seek: Type what happened in a video, we find exactly where it occurred. YOLO-World · Qdrant · spaCy — sub-second natural language video retrieval.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-
-  <!-- Navigation -->
-  <nav class="nav" id="mainNav">
-    <div class="nav-brand">Ask-N-Seek</div>
-    <div class="nav-links">
-      <a href="#about">About</a>
-      <a href="#upload">Upload</a>
-      <a href="#search">Search</a>
-      <a href="#features">Features</a>
-    </div>
-    <button class="history-toggle" id="historyToggle" title="Query History">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <polyline points="1 4 1 10 7 10"/>
-        <polyline points="23 20 23 14 17 14"/>
-        <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
-      </svg>
-      <span id="historyCount" class="history-count" style="display:none">0</span>
-    </button>
-  </nav>
-
-  <!-- Section 1: Hero -->
-  <section class="hero" id="hero">
-    <div class="hero-bg">
-      <div class="hero-particles" id="particles"></div>
-      <div class="hero-gradient"></div>
-    </div>
-    <div class="hero-content">
-      <div class="hero-label">Natural Language Video Retrieval</div>
-      <h1 class="hero-title">
-        <span class="line">Ask-N-Seek</span>
-      </h1>
-      <p class="hero-subtitle">
-        Type what happened. We'll show you exactly where — and prove it.
-      </p>
-      <div class="hero-badges">
-        <span class="hero-badge">YOLO-World-M</span>
-        <span class="hero-badge">Qdrant Vector DB</span>
-        <span class="hero-badge">Threshold 0.3197</span>
-      </div>
-      <div class="hero-scroll">
-        <span>Scroll to explore</span>
-        <div class="scroll-line"></div>
-      </div>
-    </div>
-    <div class="hero-image">
-      <img src="https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1920&q=80" alt="Abstract dark waves">
-    </div>
-  </section>
-
-  <!-- Section 2: Quote / Pitch -->
-  <section class="quote-section" id="quote">
-    <div class="container">
-      <blockquote class="quote-text">
-        "Among these frames, where every pixel becomes evidence and algorithms guard the wisdom of computer vision, the digital heritage comes alive — a primal force that reconnects people with their footage and empowers them to find any moment in time."
-      </blockquote>
-      <div class="quote-attribution">— Ask-N-Seek</div>
-    </div>
-  </section>
-
-  <!-- Section 3: About -->
-  <section class="about-section" id="about">
-    <div class="container">
-      <div class="section-header">
-        <span class="section-label">About Us</span>
-      </div>
-      <div class="about-grid">
-        <div class="about-text">
-          <h2>Ask-N-Seek is a new place of power in video analysis, where computer vision is reinterpreted through architecture, spatial design, and natural language. Here, detection takes on a new form, and the ancient spirit of search merges with modern AI comfort.</h2>
-        </div>
-        <div class="about-image">
-          <img src="https://images.unsplash.com/photo-1558618666-fcd25c85f82e?w=800&q=80" alt="AI visualization">
-          <div class="image-caption">YOLO-World · Qdrant · spaCy</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Section 4: Concept / How It Works -->
-  <section class="concept-section" id="concept">
-    <div class="container">
-      <div class="section-header">
-        <span class="section-label">Concept</span>
-      </div>
-      <div class="concept-text">
-        <h2>The architecture of the system grows from the video, preserving their strength in detection and warmth in color. Panoramic search opens up views from which the spirit intercepts, and traditions intertwine with modernity, creating a new format of retrieval: deep, meaningful, filled with the energy of vision and culture of structured data.</h2>
-      </div>
-      <div class="concept-image-full">
-        <img src="https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=1920&q=80" alt="Neural network visualization">
-        <div class="concept-overlay">
-          <div class="concept-tag">Rule-Based Parser</div>
-          <div class="concept-tag">Smart Score Bars</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Section 5: Upload (The Core Function) -->
-  <section class="upload-section" id="upload">
-    <div class="container">
-      <div class="section-header">
-        <span class="section-label">Upload</span>
-      </div>
-      <h2 class="section-title">Where the frames speak</h2>
-
-      <!-- Status bar: shows connection mode -->
-      <div class="bridge-status" id="bridgeStatus">
-        <span class="status-dot" id="statusDot"></span>
-        <span id="statusText">Connecting to backend…</span>
-      </div>
-
-      <div class="upload-zone" id="uploadZone">
-        <div class="upload-zone-inner">
-          <div class="upload-icon">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="17 8 12 3 7 8"/>
-              <line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-          </div>
-          <p class="upload-text">Drop your video here</p>
-          <p class="upload-hint">MP4, AVI, MOV, MKV</p>
-          <input type="file" id="fileInput" accept="video/*" hidden>
-        </div>
-        <div class="upload-progress" id="uploadProgress">
-          <!-- TASK 2: Elapsed timer + percentage -->
-          <div class="ingest-meta-bar" id="ingestMetaBar" style="display:none">
-            <span class="ingest-pct" id="ingestPct">0%</span>
-            <span class="ingest-elapsed" id="ingestElapsed">Elapsed: 0:00</span>
-            <span class="ingest-phase-label" id="ingestPhaseLabel">Waiting</span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill" id="progressFill"></div>
-          </div>
-          <!-- Phase indicators matching LiveIngestor phases -->
-          <div class="progress-phases" id="progressPhases">
-            <div class="phase" data-phase="scene_detection"><span class="phase-dot"></span><span class="phase-name">Scene Detection</span></div>
-            <div class="phase" data-phase="extraction"><span class="phase-dot"></span><span class="phase-name">Keyframes</span></div>
-            <div class="phase" data-phase="detection"><span class="phase-dot"></span><span class="phase-name">YOLO Detection</span></div>
-            <div class="phase" data-phase="color"><span class="phase-dot"></span><span class="phase-name">Color Extraction</span></div>
-            <div class="phase" data-phase="spatial"><span class="phase-dot"></span><span class="phase-name">Spatial Relations</span></div>
-            <div class="phase" data-phase="indexing"><span class="phase-dot"></span><span class="phase-name">Qdrant Index</span></div>
-            <div class="phase" data-phase="complete"><span class="phase-dot"></span><span class="phase-name">Complete</span></div>
-          </div>
-          <div class="progress-log" id="progressLog"></div>
-          <!-- Ingestion stats -->
-          <div class="ingest-stats" id="ingestStats" style="display:none"></div>
-          <!-- TASK 3: Top detected objects grid -->
-          <div class="top-objects-section" id="topObjectsSection" style="display:none">
-            <div class="top-objects-title">Top Detected Objects</div>
-            <div class="top-objects-grid" id="topObjectsGrid"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Collection name shown after ingestion -->
-      <!-- TASK 4: Enhanced collection badge (Gradio-style) -->
-      <div class="collection-badge" id="collectionBadge" style="display:none">
-        <div class="collection-ready-dot"></div>
-        <span class="collection-label">Active Collection:</span>
-        <span class="collection-name" id="collectionName"></span>
-      </div>
-    </div>
-  </section>
-
-  <!-- Section 6: Search -->
-  <section class="search-section" id="search">
-    <div class="container">
-      <div class="section-header">
-        <span class="section-label">Search</span>
-      </div>
-      <h2 class="section-title">Ask a question</h2>
-
-      <!-- Scenario Presets — fetched from /scenarios -->
-      <div class="scenario-presets" id="scenarioPresets">
-        <div class="presets-label">Scenario Presets</div>
-        <div class="presets-grid" id="presetsGrid">
-          <!-- Rendered by JS from /scenarios -->
-          <div class="preset-loading">Loading scenarios…</div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ask-N-Seek — Natural Language Video Retrieval</title>
+  <meta name="description" content="Ask-N-Seek: Type what happened in your footage, we'll show you exactly where — powered by YOLO-World, Qdrant, and natural language parsing.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="nav-brand">Ask-N-Seek</div>
+    <div class="nav-links">
+      <a href="#about">About</a>
+      <a href="#upload">Upload</a>
+      <a href="#search">Search</a>
+      <a href="#features">Features</a>
+    </div>
+  </nav>
+
+  <!-- Section 1: Hero -->
+  <section class="hero" id="hero">
+    <div class="hero-bg">
+      <div class="hero-particles" id="particles"></div>
+      <div class="hero-gradient"></div>
+    </div>
+    <div class="hero-content">
+      <div class="hero-label">Natural Language Video Retrieval</div>
+      <h1 class="hero-title">
+        <span class="line">Ask-N-Seek</span>
+      </h1>
+      <p class="hero-subtitle">
+        Type what happened, we'll show you exactly where — and prove it.
+      </p>
+      <div class="hero-scroll">
+        <span>Scroll to explore</span>
+        <div class="scroll-line"></div>
+      </div>
+    </div>
+    <div class="hero-image">
+      <img src="https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1920&q=80" alt="Abstract dark waves">
+    </div>
+  </section>
+
+  <!-- Section 2: Quote / Pitch -->
+  <section class="quote-section" id="quote">
+    <div class="container">
+      <blockquote class="quote-text">
+        "Among these frames, where every pixel becomes evidence and algorithms guard the wisdom of computer vision, the digital heritage comes alive — a primal force that reconnects people with their footage and empowers them to find any moment in time."
+      </blockquote>
+      <div class="quote-attribution">— Ask-N-Seek</div>
+    </div>
+  </section>
+
+  <!-- Section 3: About -->
+  <section class="about-section" id="about">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-label">About Us</span>
+      </div>
+      <div class="about-grid">
+        <div class="about-text">
+          <h2>Ask-N-Seek is a new place of power in video analysis, where computer vision is reinterpreted through architecture, spatial design, and natural language. Here, detection takes on a new form, and the ancient spirit of search merges with modern AI comfort.</h2>
         </div>
-        <!-- Task 2: Quick chips from detected classes -->
-        <div class="quick-chips-section" id="quickChipsSection" style="display:none">
-          <div class="quick-chips-label">Quick Search</div>
-          <div class="quick-chips-row" id="quickChipsRow"></div>
-        </div>
-      </div>
-
-      <div class="search-box">
-        <input type="text" id="queryInput"
-               placeholder="e.g., person without helmet · car left of person · more than two people"
-               autocomplete="off">
-        <button id="searchBtn" class="search-btn" aria-label="Search">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="11" cy="11" r="8"/>
-            <path d="m21 21-4.35-4.35"/>
-          </svg>
-        </button>
-      </div>
-
-      <!-- Vocabulary warnings banner -->
-      <div class="vocab-warnings" id="vocabWarnings"></div>
-
-      <!-- Processing log (shows pipeline steps) -->
-      <div class="query-log" id="queryLog" style="display:none">
-        <div class="query-log-inner" id="queryLogInner"></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Section 7: Results -->
-  <section class="results-section" id="results">
-    <div class="container">
-      <div class="results-header" id="resultsHeader" style="display:none">
-        <h3 class="results-count" id="resultsCount"></h3>
-        <p class="results-query" id="resultsQuery"></p>
-      </div>
-
-      <!-- Result cards grid -->
-      <div class="results-grid" id="resultsGrid"></div>
-
-      <!-- No-match Diagnosis panel (HTML from backend) -->
-      <div class="diagnosis-panel" id="diagnosisPanel" style="display:none"></div>
-
-      <!-- Video player area -->
-            <!-- Task 2 + 4: Enhanced video player with 6-sec clip controls and jump list -->
-      <div class="video-player-area" id="videoPlayerArea" style="display:none">
-        <div class="player-header">
-          <span class="player-label">Video Player</span>
-          <span class="player-time" id="playerTime">00:00.00</span>
-        </div>
-        <!-- Task 2: 6-second clip controls bar -->
-        <div class="clip-controls" id="clipControls" style="display:none">
-          <span class="clip-badge">6s Clip</span>
-          <span class="clip-info" id="clipInfo">t-3s to t+3s</span>
-          <button class="play-clip-btn" id="playClipBtn" onclick="replayClip()">&#9654; Play Clip</button>
-        </div>
-        <video id="mainVideo" controls preload="metadata"></video>
-        <!-- Task 4: Jump list replaces plain select -->
-        <div class="result-jump-header" id="jumpListHeader" style="display:none">
-          <span>Results</span>
-          <span id="jumpListCount"></span>
-        </div>
-        <div class="result-jump-list" id="resultJumpList"></div>
-        <!-- Keep hidden select for backward compat -->
-        <select id="resultPicker" style="display:none">
-          <option value="">Jump to result</option>
-        </select>
-      </div>
-    </div>
-  </section>
-
-  <!-- Section 8: Features -->
-  <section class="features-section" id="features">
-    <div class="container">
-      <div class="section-header">
-        <span class="section-label">Capabilities</span>
-      </div>
-      <h2 class="section-title">What we detect</h2>
-
-      <div class="features-grid">
-        <div class="feature-card">
-          <div class="feature-number">800+</div>
-          <div class="feature-name">Object Classes</div>
-          <div class="feature-desc">From people to vehicles to everyday objects</div>
-        </div>
-        <div class="feature-card">
-          <div class="feature-number">15+</div>
-          <div class="feature-name">Color Names</div>
-          <div class="feature-desc">CIELAB-based extraction from bounding boxes</div>
-        </div>
-        <div class="feature-card">
-          <div class="feature-number">2</div>
-          <div class="feature-name">Spatial Relations</div>
-          <div class="feature-desc">Left and right positional detection</div>
-        </div>
-        <div class="feature-card">
-          <div class="feature-number">0.3s</div>
-          <div class="feature-name">Query Time</div>
-          <div class="feature-desc">Sub-second structured search via Qdrant</div>
-        </div>
-        <div class="feature-card">
-          <div class="feature-number">0.3197</div>
-          <div class="feature-name">Threshold</div>
-          <div class="feature-desc">Calibrated confidence threshold for results</div>
-        </div>
-        <div class="feature-card">
-          <div class="feature-number">4</div>
-          <div class="feature-name">Score Dimensions</div>
-          <div class="feature-desc">Object · Color · Spatial · Negation</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Section 9: Pipeline Visualization -->
-  <section class="pipeline-section" id="pipeline">
-    <div class="container">
-      <div class="pipeline-image">
-        <img src="https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=1920&q=80" alt="Digital network">
-      </div>
-      <div class="pipeline-content">
-        <h3>The Pipeline</h3>
-        <div class="pipeline-steps">
-          <div class="pipeline-step">
-            <span class="step-num">01</span>
-            <span class="step-name">Scene Detection</span>
-            <span class="step-time">3-5s</span>
-          </div>
-          <div class="pipeline-step">
-            <span class="step-num">02</span>
-            <span class="step-name">Object Detection</span>
-            <span class="step-time">5-15s</span>
-          </div>
-          <div class="pipeline-step">
-            <span class="step-num">03</span>
-            <span class="step-name">Color Extraction</span>
-            <span class="step-time">1-2s</span>
-          </div>
-          <div class="pipeline-step">
-            <span class="step-num">04</span>
-            <span class="step-name">Spatial Relations</span>
-            <span class="step-time">&lt;1s</span>
-          </div>
-          <div class="pipeline-step">
-            <span class="step-num">05</span>
-            <span class="step-name">Qdrant Indexing</span>
-            <span class="step-time">&lt;1s</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Section 10: Interactive Hold & Move -->
-  <section class="interactive-section" id="interactive">
-    <div class="container">
-      <div class="interactive-hint">
-        <span class="hint-icon">✦</span>
-        <span>hold and move</span>
-      </div>
-      <div class="interactive-area" id="interactiveArea">
-        <div class="interactive-track" id="interactiveTrack">
-          <div class="track-item">
-            <img src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=600&q=80" alt="Mountain">
-            <span class="track-label">Scene 1</span>
-          </div>
-          <div class="track-item">
-            <img src="https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=600&q=80" alt="Forest">
-            <span class="track-label">Scene 2</span>
-          </div>
-          <div class="track-item">
-            <img src="https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=600&q=80" alt="Trees">
-            <span class="track-label">Scene 3</span>
-          </div>
-          <div class="track-item">
-            <img src="https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=600&q=80" alt="Nature">
-            <span class="track-label">Scene 4</span>
-          </div>
-          <div class="track-item">
-            <img src="https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=600&q=80" alt="Lake">
-            <span class="track-label">Scene 5</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Section 11: Footer -->
-  <footer class="footer">
-    <div class="container">
-      <div class="footer-top">
-        <div class="footer-brand">Ask-N-Seek</div>
-        <div class="footer-tagline">See you in a search</div>
-      </div>
-      <div class="footer-bottom">
-        <div class="footer-info">
-          <span>v2.4 · Real Backend</span>
-          <span>YOLO-World · Qdrant · spaCy</span>
-        </div>
-        <div class="footer-links">
-          <a href="#hero">Top</a>
-          <a href="#upload">Upload</a>
-          <a href="#search">Search</a>
-        </div>
-      </div>
-    </div>
-  </footer>
-
-  <!-- Query History Sidebar -->
-  <div class="history-sidebar" id="historySidebar">
-    <div class="history-header">
-      <span>Session History</span>
-      <button id="closeHistory" aria-label="Close history">✕</button>
-    </div>
-    <div class="history-list" id="historyList">
-      <div style="color:rgba(255,255,255,0.3);font-size:0.85rem;padding:16px;font-style:italic;">No queries yet in this session.</div>
-    </div>
-  </div>
-
-  <script src="app.js"></script>
-</body>
-</html>
+        <div class="about-image">
+          <img src="https://images.unsplash.com/photo-1558618666-fcd25c85f82e?w=800&q=80" alt="AI visualization">
+          <div class="image-caption">YOLO-World · Qdrant · spaCy</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 4: Concept / How It Works -->
+  <section class="concept-section" id="concept">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-label">Concept</span>
+      </div>
+      <div class="concept-text">
+        <h2>The architecture of the system grows from the video, preserving their strength in detection and warmth in color. Panoramic search opens up views from which the spirit intercepts, and traditions intertwine with modernity, creating a new format of retrieval: deep, meaningful, filled with the energy of vision and culture of structured data.</h2>
+      </div>
+      <div class="concept-image-full">
+        <img src="https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=1920&q=80" alt="Neural network visualization">
+        <div class="concept-overlay">
+          <div class="concept-tag">See you in a dream</div>
+          <div class="concept-tag">See you in a dream</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 5: Upload (The Core Function) -->
+  <section class="upload-section" id="upload">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-label">Upload</span>
+      </div>
+      <h2 class="section-title">Where the frames speak</h2>
+
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-zone-inner">
+          <div class="upload-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <p class="upload-text">Drop your video here</p>
+          <p class="upload-hint">MP4, AVI, MOV, MKV · Max 3 minutes</p>
+          <input type="file" id="fileInput" accept="video/*" hidden>
+        </div>
+        <div class="upload-progress" id="uploadProgress">
+          <!-- Meta bar: pct / phase / elapsed -->
+          <div id="ingestMetaBar" class="ingest-meta-bar" style="display:none;">
+            <span id="ingestPct" class="ingest-pct">0%</span>
+            <span id="ingestPhaseLabel" class="ingest-phase-label">Queued</span>
+            <span id="ingestElapsed" class="ingest-elapsed">Elapsed: 0:00</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div class="progress-phases" id="progressPhases">
+            <div class="phase" data-phase="0"><span class="phase-dot"></span><span class="phase-name">Scene Detection</span></div>
+            <div class="phase" data-phase="1"><span class="phase-dot"></span><span class="phase-name">Keyframes</span></div>
+            <div class="phase" data-phase="2"><span class="phase-dot"></span><span class="phase-name">YOLO Detection</span></div>
+            <div class="phase" data-phase="3"><span class="phase-dot"></span><span class="phase-name">Color Extraction</span></div>
+            <div class="phase" data-phase="4"><span class="phase-dot"></span><span class="phase-name">Spatial Relations</span></div>
+            <div class="phase" data-phase="5"><span class="phase-dot"></span><span class="phase-name">Qdrant Index</span></div>
+          </div>
+          <div class="progress-log" id="progressLog"></div>
+          <div id="ingestStats" class="ingest-stats" style="display:none;"></div>
+          <!-- Top objects revealed on completion -->
+          <div id="topObjectsSection" class="top-objects-section" style="display:none;">
+            <div class="top-objects-title">Top Detected Objects</div>
+            <div id="topObjectsGrid" class="top-objects-grid"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Collection badge — shown after ingestion -->
+      <div id="collectionBadge" class="collection-badge" style="display:none;">
+        <div class="collection-ready-dot"></div>
+        <div>
+          <div style="font-family:var(--font-mono);font-size:0.6rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--color-text-dim);margin-bottom:4px;">Active Collection</div>
+          <div id="collectionName" style="font-family:var(--font-mono);font-size:0.85rem;color:var(--color-text-muted);"></div>
+        </div>
+        <!-- Bridge status indicator -->
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+          <span id="bridgeStatusDot" style="width:6px;height:6px;border-radius:50%;background:#374151;flex-shrink:0;display:inline-block;"></span>
+          <span id="bridgeStatusText" style="font-family:var(--font-mono);font-size:0.65rem;color:var(--color-text-dim);">Checking...</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Bridge status bar (top-level, always visible) -->
+  <div id="bridgeStatusBar" style="background:rgba(0,0,0,0.6);border-bottom:1px solid var(--color-border);padding:8px 40px;display:flex;align-items:center;gap:10px;font-family:var(--font-mono);font-size:0.65rem;position:sticky;top:0;z-index:999;backdrop-filter:blur(10px);">
+    <span id="globalBridgeDot" style="width:6px;height:6px;border-radius:50%;background:#374151;flex-shrink:0;display:inline-block;"></span>
+    <span id="globalBridgeText" style="color:var(--color-text-dim);">Connecting to backend...</span>
+  </div>
+
+  <!-- Section 6: Search -->
+  <section class="search-section" id="search">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-label">Search</span>
+      </div>
+      <h2 class="section-title">Ask a question</h2>
+
+      <!-- Scenario presets — shown after backend connects -->
+      <div id="scenarioPresets" class="scenario-presets" style="display:none;">
+        <div class="presets-label">Investigation Scenarios</div>
+        <div id="presetsGrid" class="presets-grid"></div>
+        <div id="quickChips" class="quick-chips" style="display:none;"></div>
+      </div>
+
+      <div class="search-box">
+        <input type="text" id="queryInput" placeholder="e.g., person without helmet left of blue car" autocomplete="off">
+        <button id="searchBtn" class="search-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="m21 21-4.35-4.35"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="suggestions">
+        <button class="suggestion-chip" data-query="person in red">person in red</button>
+        <button class="suggestion-chip" data-query="person without helmet">person without helmet</button>
+        <button class="suggestion-chip" data-query="two people">two people</button>
+        <button class="suggestion-chip" data-query="person left of car">person left of car</button>
+        <button class="suggestion-chip" data-query="car in dark blue">car in dark blue</button>
+        <button class="suggestion-chip" data-query="purple elephant">purple elephant</button>
+      </div>
+
+      <div class="vocab-warnings" id="vocabWarnings"></div>
+    </div>
+  </section>
+
+  <!-- Section 7: Results -->
+  <section class="results-section" id="results">
+    <div class="container">
+      <div class="results-header" id="resultsHeader" style="display:none;">
+        <h3 class="results-count" id="resultsCount"></h3>
+        <p class="results-query" id="resultsQuery"></p>
+      </div>
+
+      <div class="results-grid" id="resultsGrid"></div>
+
+      <div class="diagnosis-panel" id="diagnosisPanel" style="display:none;"></div>
+
+      <div class="video-player-area" id="videoPlayerArea" style="display:none;">
+        <div class="player-header">
+          <span class="player-label">Video Player</span>
+          <span class="player-time" id="playerTime">00:00.00</span>
+        </div>
+        <video id="mainVideo" controls></video>
+        <!-- Clip controls -->
+        <div id="clipControls" class="clip-controls" style="display:none;">
+          <span class="clip-badge">6s Clip</span>
+          <span id="clipInfo" class="clip-info"></span>
+          <button id="playClipBtn" class="play-clip-btn">&#9654; Play Clip</button>
+        </div>
+        <div class="result-picker">
+          <select id="resultPicker">
+            <option value="">Jump to result...</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Jump list: all matches -->
+      <div id="jumpListSection" style="display:none;">
+        <div class="jump-list-header">All Matches</div>
+        <div id="resultJumpList" class="result-jump-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 8: Features -->
+  <section class="features-section" id="features">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-label">Capabilities</span>
+      </div>
+      <h2 class="section-title">What we detect</h2>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-number">800+</div>
+          <div class="feature-name">Object Classes</div>
+          <div class="feature-desc">From people to vehicles to everyday objects</div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-number">15+</div>
+          <div class="feature-name">Color Names</div>
+          <div class="feature-desc">CIELAB-based extraction from bounding boxes</div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-number">2</div>
+          <div class="feature-name">Spatial Relations</div>
+          <div class="feature-desc">Left and right positional detection</div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-number">0.3s</div>
+          <div class="feature-name">Query Time</div>
+          <div class="feature-desc">Sub-second structured search via Qdrant</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 9: Pipeline Visualization -->
+  <section class="pipeline-section" id="pipeline">
+    <div class="container">
+      <div class="pipeline-image">
+        <img src="https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=1920&q=80" alt="Digital network">
+      </div>
+      <div class="pipeline-content">
+        <h3>The Pipeline</h3>
+        <div class="pipeline-steps">
+          <div class="pipeline-step">
+            <span class="step-num">01</span>
+            <span class="step-name">Scene Detection</span>
+            <span class="step-time">3-5s</span>
+          </div>
+          <div class="pipeline-step">
+            <span class="step-num">02</span>
+            <span class="step-name">Object Detection</span>
+            <span class="step-time">5-15s</span>
+          </div>
+          <div class="pipeline-step">
+            <span class="step-num">03</span>
+            <span class="step-name">Color Extraction</span>
+            <span class="step-time">1-2s</span>
+          </div>
+          <div class="pipeline-step">
+            <span class="step-num">04</span>
+            <span class="step-name">Spatial Relations</span>
+            <span class="step-time">&lt;1s</span>
+          </div>
+          <div class="pipeline-step">
+            <span class="step-num">05</span>
+            <span class="step-name">Qdrant Indexing</span>
+            <span class="step-time">&lt;1s</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 10: Interactive Hold & Move -->
+  <section class="interactive-section" id="interactive">
+    <div class="container">
+      <div class="interactive-hint">
+        <span class="hint-icon">✦</span>
+        <span>hold and move</span>
+      </div>
+      <div class="interactive-area" id="interactiveArea">
+        <div class="interactive-track" id="interactiveTrack">
+          <div class="track-item">
+            <img src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=600&q=80" alt="Mountain">
+            <span class="track-label">Scene 1</span>
+          </div>
+          <div class="track-item">
+            <img src="https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=600&q=80" alt="Forest">
+            <span class="track-label">Scene 2</span>
+          </div>
+          <div class="track-item">
+            <img src="https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=600&q=80" alt="Trees">
+            <span class="track-label">Scene 3</span>
+          </div>
+          <div class="track-item">
+            <img src="https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=600&q=80" alt="Nature">
+            <span class="track-label">Scene 4</span>
+          </div>
+          <div class="track-item">
+            <img src="https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=600&q=80" alt="Lake">
+            <span class="track-label">Scene 5</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 11: Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-top">
+        <div class="footer-brand">Ask-N-Seek</div>
+        <div class="footer-tagline">See you in a search</div>
+      </div>
+      <div class="footer-bottom">
+        <div class="footer-info">
+          <span>v2.4 · Hackathon Build</span>
+          <span>YOLO-World · Qdrant · spaCy</span>
+        </div>
+        <div class="footer-links">
+          <a href="#hero">Top</a>
+          <a href="#upload">Upload</a>
+          <a href="#search">Search</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Query History Sidebar -->
+  <div class="history-sidebar" id="historySidebar">
+    <div class="history-header">
+      <span>Session History</span>
+      <button id="closeHistory">&#10005;</button>
+    </div>
+    <div class="history-list" id="historyList"></div>
+  </div>
+  <button class="history-toggle" id="historyToggle">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="1 4 1 10 7 10"/>
+      <polyline points="23 20 23 14 17 14"/>
+      <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+    </svg>
+  </button>
+
+  <script src="app.js"></script>
+</body>
+</html>
