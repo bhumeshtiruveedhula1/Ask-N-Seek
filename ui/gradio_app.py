@@ -1006,7 +1006,6 @@ def _generate_ingest_summary(collection_name: str, client) -> str:
 def build_app() -> gr.Blocks:
     with gr.Blocks(
         title="Ask-N-Seek — Natural Language Video Retrieval",
-        head=f"<style>{CUSTOM_CSS}</style><script>{SETUP_JS}</script>",
     ) as demo:
 
         # ── 1. HEADER ────────────────────────────────────────────────────────
@@ -1260,4 +1259,5 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         show_error=True,
+        head=f"<style>{CUSTOM_CSS}</style><script>{SETUP_JS}</script>",
     )
