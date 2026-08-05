@@ -57,6 +57,43 @@ import config
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Bug 3 fix: Spatial subject sanitizer
+# ---------------------------------------------------------------------------
+# spaCy binds prepositions to the nearest noun, so "person in red shirt left
+# of car" produces subject='shirt'. Since clothing always moves with the
+# person who wears it, we redirect the spatial subject to 'person' whenever
+# a person object is present in the same query.
+_CLOTHING_ITEMS: frozenset[str] = frozenset({
+    "shirt", "jacket", "coat", "suit", "dress", "skirt", "pants", "trousers",
+    "shorts", "jeans", "hoodie", "sweater", "uniform", "hat", "cap", "helmet",
+    "hardhat", "visor", "gloves", "boots", "shoes", "sneakers", "sandals",
+    "belt", "tie", "scarf", "mask", "apron", "vest", "robe", "gown", "raincoat",
+    "jumpsuit", "overalls", "leggings", "stockings", "socks", "swimsuit",
+    "backpack", "bag", "handbag", "purse",
+})
+
+
+def _sanitize_spatial_subject(parse_result) -> None:
+    """
+    If spatial subject is a clothing/accessory item and 'person' is also in
+    the query objects, redirect spatial subject to 'person'. Mutates in place.
+    """
+    spatial = getattr(parse_result, "spatial", None)
+    if not spatial:
+        return
+    objects = getattr(parse_result, "objects", []) or []
+    has_person = any(o.get("class_name") == "person" for o in objects)
+    if not has_person:
+        return
+    for sp in spatial:
+        if sp.get("subject") in _CLOTHING_ITEMS:
+            sp["subject"] = "person"
+            logger.debug(
+                "parser_gateway: sanitized spatial subject → person (was clothing item)"
+            )
+
+
 def _normalise_parse_result(result) -> dict:
     """
     Convert Achilles's ParseResult dataclass → stub-flat dict shape.
@@ -109,6 +146,8 @@ def _normalise_parse_result(result) -> dict:
     ]
 
     # Spatial relation: first spatial spec if present
+    # Sanitize subject misbinding (clothing → person) before extracting
+    _sanitize_spatial_subject(result)
     spatial_relation = None
     if spatial:
         sp = spatial[0]

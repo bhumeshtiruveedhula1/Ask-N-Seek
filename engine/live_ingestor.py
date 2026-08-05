@@ -68,50 +68,143 @@ def _calculate_iou(box_a: tuple, box_b: tuple) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def _calculate_ioa(small_box: tuple, large_box: tuple) -> float:
+    """Intersection over Area of small_box (0.0-1.0). Used for accessory parent binding."""
+    x1 = max(small_box[0], large_box[0])
+    y1 = max(small_box[1], large_box[1])
+    x2 = min(small_box[2], large_box[2])
+    y2 = min(small_box[3], large_box[3])
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    area_small = (small_box[2] - small_box[0]) * (small_box[3] - small_box[1])
+    return inter / area_small if area_small > 0 else 0.0
+
+
+# Accessory classes: small items that sit inside a person's bounding box.
+# IoA-based parent binding keeps one accessory per person instead of per detection.
+_ACCESSORY_CLASSES: frozenset[str] = frozenset({
+    "necklace", "glasses", "watch", "bracelet", "earring",
+})
+
+# All person-role classes (post synonym-map resolution) that can be accessory parents.
+_PERSON_CLASSES: frozenset[str] = frozenset({
+    "person", "man", "woman", "child", "boy", "girl", "baby",
+    "firefighter", "traffic warden", "police", "officer", "soldier",
+    "worker", "construction worker", "chef", "doctor", "nurse",
+    "patient", "student", "teacher", "pedestrian",
+})
+
+
 def _deduplicate_detections(
     detections: list[dict],
     iou_thresh: float = 0.65,
 ) -> list[dict]:
     """
-    Class-specific secondary NMS: keep highest-confidence box per overlapping group.
+    Secondary NMS with IoA-based parent binding for accessories.
 
-    Groups detections by class, then for each class applies greedy NMS at the
-    given IoU threshold. The survivor is always the highest-confidence detection.
-    Field names match live_ingestor detection contract: 'class', 'bbox', 'confidence'.
+    For non-accessories: class-grouped greedy NMS at iou_thresh (unchanged).
+    For accessories (necklace, glasses, watch, bracelet, earring):
+      - Bind each to its containing person box via IoA > 0.50.
+      - Keep only the highest-confidence detection per (accessory_class, person).
+      - Accessories with no parent fall back to standard NMS.
+    This prevents necklace x4 when two people stand side by side.
     """
     if not detections:
         return detections
 
+    # ── Split accessories from non-accessories ──────────────────────────────
+    accs   = [d for d in detections if (d.get("class") or d.get("class_name")) in _ACCESSORY_CLASSES]
+    others = [d for d in detections if (d.get("class") or d.get("class_name")) not in _ACCESSORY_CLASSES]
+
+    # ── Standard class-grouped NMS on non-accessories ───────────────────────
     by_class: dict[str, list[dict]] = {}
-    for d in detections:
+    for d in others:
         cls = d.get("class") or d.get("class_name", "unknown")
         by_class.setdefault(cls, []).append(d)
 
-    deduped: list[dict] = []
+    deduped_others: list[dict] = []
     for cls_dets in by_class.values():
-        # Sort by confidence descending — greedy keeps best first
         cls_dets.sort(key=lambda x: x.get("confidence", 0), reverse=True)
         keep: list[dict] = []
         for det in cls_dets:
             bbox = det.get("bbox") or det.get("box")
             if not bbox or len(bbox) != 4:
-                keep.append(det)  # malformed bbox — keep unconditionally
+                keep.append(det)
                 continue
             overlap = any(
                 len(k.get("bbox") or k.get("box", [])) == 4
-                and _calculate_iou(bbox, k.get("bbox") or k.get("box"))
-                > iou_thresh
+                and _calculate_iou(bbox, k.get("bbox") or k.get("box")) > iou_thresh
                 for k in keep
             )
             if not overlap:
                 keep.append(det)
-        deduped.extend(keep)
+        deduped_others.extend(keep)
 
-    n_before, n_after = len(detections), len(deduped)
+    # ── Find person boxes from the deduped non-accessory set ────────────────
+    person_boxes = [
+        d for d in deduped_others
+        if (d.get("class") or d.get("class_name")) in _PERSON_CLASSES
+    ]
+
+    # ── Bind accessories to parent person via IoA > 0.50 ───────────────────
+    # Group: (accessory_class, id(parent_person)) → keep highest confidence
+    grouped: dict[tuple[str, int], list[dict]] = {}
+    orphan_accs: list[dict] = []
+
+    for acc in accs:
+        abox = acc.get("bbox") or acc.get("box")
+        if not abox or len(abox) != 4:
+            orphan_accs.append(acc)
+            continue
+        best_parent = None
+        best_ioa = 0.0
+        for person in person_boxes:
+            pbox = person.get("bbox") or person.get("box")
+            if not pbox or len(pbox) != 4:
+                continue
+            ioa = _calculate_ioa(abox, pbox)
+            if ioa > best_ioa and ioa > 0.50:
+                best_ioa = ioa
+                best_parent = person
+        if best_parent is not None:
+            key = (acc.get("class") or acc.get("class_name", "unknown"), id(best_parent))
+            grouped.setdefault(key, []).append(acc)
+        else:
+            orphan_accs.append(acc)
+
+    deduped_accs: list[dict] = []
+    for group in grouped.values():
+        group.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+        deduped_accs.append(group[0])
+
+    # ── Fallback standard NMS on orphan accessories (no parent found) ───────
+    if orphan_accs:
+        orphan_by_class: dict[str, list[dict]] = {}
+        for d in orphan_accs:
+            cls = d.get("class") or d.get("class_name", "unknown")
+            orphan_by_class.setdefault(cls, []).append(d)
+        for cls_dets in orphan_by_class.values():
+            cls_dets.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+            keep: list[dict] = []
+            for det in cls_dets:
+                bbox = det.get("bbox") or det.get("box")
+                if not bbox or len(bbox) != 4:
+                    keep.append(det)
+                    continue
+                overlap = any(
+                    len(k.get("bbox") or k.get("box", [])) == 4
+                    and _calculate_iou(bbox, k.get("bbox") or k.get("box")) > iou_thresh
+                    for k in keep
+                )
+                if not overlap:
+                    keep.append(det)
+            deduped_accs.extend(keep)
+
+    n_before = len(detections)
+    n_after  = len(deduped_others) + len(deduped_accs)
     if n_after < n_before:
         logger.debug("[dedup] %d → %d detections (dropped %d duplicates)",
                      n_before, n_after, n_before - n_after)
-    return deduped
+    return deduped_others + deduped_accs
 
 
 class LiveIngestor:
@@ -241,10 +334,9 @@ class LiveIngestor:
                 raw_cls = det.get("class", "unknown")
                 det["class"] = SYNONYM_MAP.get(raw_cls, raw_cls)
 
-            # Fix B / Task 2: Conditional NMS — accessories need tighter dedup.
-            # Necklace/glasses on a face have IoU ~0.40-0.50; the global 0.55
-            # threshold misses them. Non-accessories keep the standard 0.55.
-            _ACCESSORY_CLASSES = {"necklace", "glasses", "watch", "bracelet", "earring"}
+            # Conditional NMS: new IoA-based accessory dedup (Bug 4 fix).
+            # _ACCESSORY_CLASSES now at module level; _deduplicate_detections
+            # handles parent binding internally — call site unchanged.
             if any(d.get("class", "") in _ACCESSORY_CLASSES for d in dets):
                 dets = _deduplicate_detections(dets, iou_thresh=0.40)
             else:
