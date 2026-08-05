@@ -223,10 +223,19 @@ def _normalise_parse_result(result) -> dict:
     if spatial:
 
         sp = spatial[0]
+        sp_subject = sp.get("subject", "")   # e.g. "person" in "person near car"
+        sp_object  = sp.get("object_", "")   # e.g. "car"
         spatial_relation = {
             "type":         sp.get("relation"),
-            "target_class": sp.get("object_"),
+            "target_class": sp_object,
         }
+        # ── Spatial target swap ─────────────────────────────────────────
+        # When gateway promotes sp_object (car) to primary for Qdrant search,
+        # the spatial filter must point to sp_subject (person) — not car→car.
+        # Without this swap, _has_spatial_relation checks car.near(car) which
+        # never matches, so ALL candidate frames leak through unfiltered.
+        if class_filter == sp_object and sp_subject and sp_subject != sp_object:
+            spatial_relation["target_class"] = sp_subject
 
     # Count constraint: primary object's count fields if present
     count_constraint = None
