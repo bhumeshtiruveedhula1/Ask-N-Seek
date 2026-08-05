@@ -26,13 +26,27 @@ def get_qdrant_client():
     """
     Return a Qdrant client.
 
-    - USE_STUB_QDRANT=True  (default) → in-memory QdrantClient with seeded stub data
-    - USE_STUB_QDRANT=False            → real QdrantClient(host, port, api_key)
+    Priority:
+    1. USE_STUB_QDRANT=True  → in-memory client (tests / CI only, data lost on restart)
+    2. QDRANT_HOST set       → remote Qdrant server (production / cloud)
+    3. Default               → local disk-persisted client at QDRANT_LOCAL_PATH
+                               (no separate server needed, data survives restarts)
     """
     if config.USE_STUB_QDRANT:
         logger.debug("qdrant_gateway: using in-memory stub client.")
         from engine.stub_data import get_stub_client
         return get_stub_client()
+
+    # ── Local disk-persisted Qdrant (default for dev/demo) ──────────────
+    # QdrantClient(path=...) uses qdrant_client's embedded storage engine.
+    # Writes to QDRANT_LOCAL_PATH on disk. No Qdrant server process needed.
+    if not getattr(config, "QDRANT_HOST", ""):
+        import os
+        local_path = config.QDRANT_LOCAL_PATH
+        os.makedirs(local_path, exist_ok=True)
+        logger.info("qdrant_gateway: using local disk store at %s", local_path)
+        from qdrant_client import QdrantClient
+        return QdrantClient(path=local_path)
 
     logger.info(
         "qdrant_gateway: connecting to real Qdrant at %s:%d.",

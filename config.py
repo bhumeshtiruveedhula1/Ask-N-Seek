@@ -41,12 +41,21 @@ JUDGE_SESSION_PREFIX: str    = "judge_session_"
 MAX_SESSION_AGE_MINUTES: int = 30
 
 # ---------------------------------------------------------------------------
-# Data-source switch: True → in-memory stub, False → real Qdrant
-# TODO: SWAP FOR ACHILLES — set USE_STUB_QDRANT = False in .env when ready
+# Data-source switch
 # ---------------------------------------------------------------------------
-USE_STUB_QDRANT: bool = os.getenv("USE_STUB_QDRANT", "true").lower() in {
+# USE_STUB_QDRANT=True  -> in-memory qdrant (data lost on restart) — tests only
+# USE_STUB_QDRANT=False -> local disk-persisted Qdrant (QDRANT_LOCAL_PATH) — default
+# Set QDRANT_HOST/PORT/API_KEY to use a remote Qdrant server instead.
+USE_STUB_QDRANT: bool = os.getenv("USE_STUB_QDRANT", "false").lower() in {
     "true", "1", "yes",
 }
+
+# Local-disk Qdrant storage path (used when USE_STUB_QDRANT=False and QDRANT_HOST is empty)
+# Data here survives server restarts — no separate Qdrant process needed.
+QDRANT_LOCAL_PATH: str = os.getenv(
+    "QDRANT_LOCAL_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant_storage"),
+)
 
 # ---------------------------------------------------------------------------
 # Parser configuration (for engine/parser_gateway.py)
