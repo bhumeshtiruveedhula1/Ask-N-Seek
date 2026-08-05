@@ -80,11 +80,25 @@ try:
     from backend.query.query_parser import _preprocess_query as _parser_preprocess
 
     _qdrant_client = get_qdrant_client()
-    _collection = get_collection_name()
     _query_cache = QueryCache()
     _backend_available = True
+
+    # ── Persist active collection across restarts (Fix 2) ──────────────
+    # After ingestion, _ACTIVE_COLL_FILE stores the real collection name.
+    # On restart, load it so queries don't fall back to stub_video_objects.
+    _ACTIVE_COLL_FILE = os.path.join(BACKEND_PATH, ".active_collection.json")
+    _persisted = None
+    if os.path.isfile(_ACTIVE_COLL_FILE):
+        try:
+            with open(_ACTIVE_COLL_FILE, "r") as _f:
+                _persisted = json.load(_f).get("collection")
+        except Exception:
+            pass
+    _collection = _persisted or get_collection_name()
+
     logger.info("✅ Backend connected — path: %s", BACKEND_PATH)
-    logger.info("✅ Default collection: %s", _collection)
+    logger.info("✅ Active collection: %s%s", _collection,
+                " (restored from file)" if _persisted else " (default)")
 
 except Exception as _e:
     logger.warning("⚠️  Backend import failed: %s", _e)
@@ -265,7 +279,15 @@ def _run_ingestion_job(job_id: str, video_path: str) -> None:
                     _ingest_jobs[job_id]["status"] = "complete"
                     if _query_cache is not None:
                         _query_cache.clear()
-                    logger.info("Ingestion complete — collection: %s", collection)
+                    # ── Persist collection name so restarts remember it (Fix 2) ──
+                    global _collection
+                    _collection = collection
+                    try:
+                        with open(_ACTIVE_COLL_FILE, "w") as _cf:
+                            json.dump({"collection": collection}, _cf)
+                    except Exception as _pe:
+                        logger.warning("Could not persist collection name: %s", _pe)
+                    logger.info("Ingestion complete — collection: %s (persisted)", collection)
 
                 elif phase == "error":
                     _ingest_jobs[job_id]["status"] = "error"
@@ -509,8 +531,10 @@ async def query_endpoint(req: QueryRequest):
         "cached":         False,
     }
 
-    # Cache the result (only for clean matches)
-    _query_cache.set(query, target_coll, response)
+    # Cache ONLY successful matches — never cache empty/error/no_match responses (Fix 3)
+    # Caching no_match causes stale "no results" to persist until server restart.
+    if status == "match" and enriched:
+        _query_cache.set(query, target_coll, response)
 
     return response
 

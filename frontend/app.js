@@ -620,8 +620,10 @@ async function performSearch(query, skipHistory) {
     document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
 
   } catch (e) {
+    // Clear old results immediately — stale cards from previous query must not persist
+    renderResults({ results: [], diagnosis: { html: `<p style="color:#f87171;">⚠️ Search failed: ${e.message}. Is the bridge server running on port 8000?</p>` } });
     const warEl = document.getElementById('vocabWarnings');
-    warEl.innerHTML = `<p style="color:#f87171;">Search failed: ${e.message}</p>`;
+    warEl.innerHTML = `<p style="color:#f87171;">Connection error: ${e.message}</p>`;
     warEl.classList.add('active');
   }
 
