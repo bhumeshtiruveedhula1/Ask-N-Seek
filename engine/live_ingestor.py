@@ -24,8 +24,12 @@ import uuid
 from pathlib import Path
 from typing import Generator
 
+import concurrent.futures
 import cv2
 import numpy as np
+import time
+
+import config as _config
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
@@ -202,29 +206,54 @@ class LiveIngestor:
             return
 
         # ── Phase 4: Color extraction (60 → 75%) ────────────────────────
+        _color_phase_start = time.time()
         yield _progress("color", 60, "Extracting dominant colors…", stats)
 
-        color_map: dict[str, list[str]] = {}   # frame_path → [color per detection]
-        for record in frame_records:
+        # ── Optimization 1: Early confidence filter ──────────────────────
+        # Drop low-confidence detections BEFORE color extraction and spatial.
+        # Reduces wasted cv2/k-means work. Threshold is well below THRESHOLD
+        # (0.3197) so near-threshold hits are preserved.
+        ecf = getattr(_config, "EARLY_CONFIDENCE_FILTER", 0.15)
+        for fp in list(detections_map.keys()):
+            all_dets = detections_map[fp]
+            filtered = [d for d in all_dets if d.get("confidence", 0) >= ecf]
+            n_dropped = len(all_dets) - len(filtered)
+            if n_dropped:
+                self._log(f"Early-conf filter: dropped {n_dropped} dets from {os.path.basename(fp)}")
+                detections_map[fp] = filtered
+
+        # ── Optimization 2: Parallel color extraction per frame ──────────
+        # Each frame's detections are color-extracted in parallel using a
+        # thread pool (cv2/numpy release the GIL for most operations).
+        color_map: dict[str, list[str]] = {}
+
+        def _extract_frame_colors(record: dict) -> tuple[str, list[str]]:
+            """Worker: read frame from disk, run extract_color for each det."""
             fp   = record["frame_path"]
             dets = detections_map.get(fp, [])
             if not dets:
-                color_map[fp] = []
-                continue
+                return fp, []
             frame_bgr = cv2.imread(fp)
             if frame_bgr is None:
-                color_map[fp] = ["unknown"] * len(dets)
-                continue
+                return fp, ["unknown"] * len(dets)
             colors = []
             for det in dets:
                 try:
-                    c = extract_color(frame_bgr, det["bbox"])
+                    # Bundle 2 call-site: pass class_name for class-aware crop
+                    c = extract_color(frame_bgr, det["bbox"], class_name=det.get("class"))
                 except Exception:  # noqa: BLE001
                     c = "unknown"
                 colors.append(c)
-            color_map[fp] = colors
+            return fp, colors
 
-        yield _progress("color", 75, "Color extraction complete.", stats)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(_extract_frame_colors, r): r for r in frame_records}
+            for future in concurrent.futures.as_completed(futures):
+                fp, cols = future.result()
+                color_map[fp] = cols
+
+        _color_phase_elapsed = time.time() - _color_phase_start
+        yield _progress("color", 75, f"Color extraction complete in {_color_phase_elapsed:.2f}s.", stats)
 
         # ── Phase 5: Spatial (already inside detections — just log) ─────
         yield _progress("spatial", 75, "Spatial relations already computed by detector.", stats)

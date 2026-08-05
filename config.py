@@ -141,6 +141,15 @@ MAX_KEYFRAMES_PER_SCENE: int = 5
 MIN_KEYFRAME_INTERVAL_S: float = 2.0
 
 # ---------------------------------------------------------------------------
+# Ingestion speed optimisation
+# ---------------------------------------------------------------------------
+# Drop detections below this confidence BEFORE color extraction and spatial
+# computation. Reduces wasted cv2/k-means work on uncertain detections.
+# Must be well below THRESHOLD (0.3197) to preserve near-threshold hits.
+EARLY_CONFIDENCE_FILTER: float = 0.15
+
+
+# ---------------------------------------------------------------------------
 # Gradio
 # ---------------------------------------------------------------------------
 GRADIO_PORT: int = int(os.getenv("GRADIO_PORT", "7860"))

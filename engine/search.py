@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
 from config import FIELD_MAP, STUB_COLLECTION
 
@@ -165,9 +165,29 @@ def search_structured(
     # -----------------------------------------------------------------------
     # Step 2: Fetch ALL objects in candidate frames (needed for negation)
     # -----------------------------------------------------------------------
-    # For stub data this is a full scroll — acceptable for 72 rows.
-    # For production, use a targeted filter on video_id + frame_index.
-    all_points = _scroll_all(client, collection_name, qdrant_filter=None)
+    # Build a targeted filter limited to candidate video_ids + frame_indices.
+    # This changes O(N_collection) to O(N_candidates) — critical for large videos.
+    # If lists are empty (shouldn't happen after early return above), fall back.
+    candidate_video_ids   = list({_p["video_id"]    for _p in candidate_points})
+    candidate_frame_idxs  = list({_p["frame_index"] for _p in candidate_points})
+
+    if candidate_video_ids and candidate_frame_idxs:
+        candidate_filter = Filter(
+            must=[
+                FieldCondition(
+                    key=_QV,
+                    match=MatchAny(any=candidate_video_ids),
+                ),
+                FieldCondition(
+                    key=_QI,
+                    match=MatchAny(any=candidate_frame_idxs),
+                ),
+            ]
+        )
+    else:
+        candidate_filter = None  # fallback: full scroll (shouldn't occur)
+
+    all_points = _scroll_all(client, collection_name, qdrant_filter=candidate_filter)
 
     all_by_frame: dict[tuple, list[dict]] = defaultdict(list)
     for p in all_points:

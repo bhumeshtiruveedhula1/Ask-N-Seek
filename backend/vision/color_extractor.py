@@ -1,14 +1,18 @@
 """
-color_extractor.py — Center-Weighted Crop + k-means + CIELAB Color Naming
-==========================================================================
+color_extractor.py — Class-Aware Crop + Outlier Rejection + k-means + CIELAB Color Naming
+==========================================================================================
 Architecture ref : 03_Architecture_Final.md §2 (Color extraction row)
 TRD ref          : TRD-Build-Plan-Achilles.md §PART 2
 
-Rule: center-weighted crop (inner 50% of bbox) → k-means (k=3) →
-      find cluster with most pixels → nearest CIELAB name from curated palette.
+Rule: class-aware crop (vehicles=bottom 60%, persons=body 30-80%, else center 50%)
+      → outlier rejection (exclude near-neutral, very dark, overexposed pixels)
+      → k-means (k=3) → find cluster with most valid pixels
+      → nearest CIELAB name from curated palette.
 
-This avoids background contamination from the bbox edges.
-Color is always a string from CIELAB_PALETTE (or "unknown" on failure).
+Class-aware crop avoids: windshield glass on cars (reads black/gray instead of body
+colour) and faces on people (reads skin tone instead of clothing colour).
+Outlier rejection ensures the dominant colour reflects actual object colour, not
+background contamination at bbox edges.
 """
 
 from __future__ import annotations
@@ -20,6 +24,21 @@ try:
     _CV2_OK = True
 except ImportError:
     _CV2_OK = False
+
+# ---------------------------------------------------------------------------
+# Class-aware crop regions
+# ---------------------------------------------------------------------------
+# Vehicles: sample bottom 60% of bbox to avoid windshield glass (which reads
+# as black/gray even on a red car).
+VEHICLE_CLASSES: frozenset[str] = frozenset({
+    "car", "truck", "bus", "motorcycle", "bicycle",
+})
+
+# Persons: sample middle body (skip top 30% = face/hair, skip bottom 20% = legs)
+# so clothing colour is returned, not skin tone or shoe colour.
+PERSON_CLASSES: frozenset[str] = frozenset({
+    "person", "man", "woman", "child",
+})
 
 # ---------------------------------------------------------------------------
 # CIELAB colour palette — (name, L, a, b) — curated for PS-relevance
@@ -100,19 +119,28 @@ def extract_color(
     frame_bgr: np.ndarray,
     bbox: tuple[int, int, int, int],  # x1, y1, x2, y2
     k: int = 3,
+    class_name: str | None = None,
 ) -> str:
     """
-    Extract dominant color name from the center-weighted crop of a bbox.
+    Extract dominant color name from a class-aware crop of a bbox.
 
     Parameters
     ----------
-    frame_bgr : H×W×3 uint8 BGR image (the full frame).
-    bbox      : (x1, y1, x2, y2) pixel coordinates.
-    k         : number of k-means clusters (default 3).
+    frame_bgr  : H×W×3 uint8 BGR image (the full frame).
+    bbox       : (x1, y1, x2, y2) pixel coordinates.
+    k          : number of k-means clusters (default 3).
+    class_name : object class (e.g. "car", "person") for class-aware cropping.
+                 Pass None for the legacy center-50% behaviour.
 
     Returns
     -------
     str  : colour name from CIELAB_PALETTE, or "unknown" on failure.
+
+    Class-aware crop rules
+    ----------------------
+    - Vehicles : bottom 60% of bbox (skips windshield glass → reads body colour).
+    - Persons  : middle body 30–80% (skips face/hair → reads clothing colour).
+    - Default  : center 50% crop (25% margin each side).
     """
     try:
         x1, y1, x2, y2 = bbox
@@ -125,24 +153,59 @@ def extract_color(
         if bw < 4 or bh < 4:
             return "unknown"
 
-        # Center-weighted crop: inner 50% of the bbox (25% margin each side)
-        cx_margin = max(1, int(bw * 0.25))
-        cy_margin = max(1, int(bh * 0.25))
-        crop = frame_bgr[
-            y1 + cy_margin : y2 - cy_margin,
-            x1 + cx_margin : x2 - cx_margin,
-        ]
+        # ---- Class-aware crop selection -----------------------------------
+        cls = (class_name or "").lower()
 
-        if crop.size == 0:
+        if cls in VEHICLE_CLASSES:
+            # Bottom 60% of bbox: skip windshield (top 40%)
+            crop_y1 = y1 + int(bh * 0.4)
+            crop = frame_bgr[crop_y1:y2, x1:x2]
+
+        elif cls in PERSON_CLASSES:
+            # Middle body: skip face (top 30%) and legs (bottom 20%)
+            crop_y1 = y1 + int(bh * 0.3)
+            crop_y2 = y2 - int(bh * 0.2)
+            if crop_y2 <= crop_y1:
+                crop_y2 = crop_y1 + 1  # guard against tiny bboxes
+            crop = frame_bgr[crop_y1:crop_y2, x1:x2]
+
+        else:
+            # Default: center 50% crop (25% margin each side)
+            cx_margin = max(1, int(bw * 0.25))
+            cy_margin = max(1, int(bh * 0.25))
+            crop = frame_bgr[
+                y1 + cy_margin : y2 - cy_margin,
+                x1 + cx_margin : x2 - cx_margin,
+            ]
+
+        if crop is None or crop.size == 0:
             return "unknown"
 
-        # Downsample to 32x32 before k-means — eliminates large pixel arrays, ~100x faster
-        crop = cv2.resize(crop, (32, 32), interpolation=cv2.INTER_AREA)
+        # Downsample to 32x32 before k-means — ~100x faster, perceptually fine
+        crop_resized = cv2.resize(crop, (32, 32), interpolation=cv2.INTER_AREA)
 
-        # Flatten to Nx3
-        pixels = crop.reshape(-1, 3).astype(np.float32)
+        # ---- Outlier rejection in LAB space --------------------------------
+        # Exclude near-neutral (|a|+|b| < 15), very dark (L < 20), and
+        # overexposed (L > 95) pixels — these are background/glass/highlight
+        # contamination and skew the dominant-colour result.
+        lab_img  = cv2.cvtColor(crop_resized, cv2.COLOR_BGR2LAB)
+        lab_px   = lab_img.reshape(-1, 3).astype(np.float32)
+        # cv2 LAB: L in [0,255], a/b in [0,255] (offset by 128)
+        l_scaled = lab_px[:, 0] * 100.0 / 255.0   # [0, 100]
+        a_center = lab_px[:, 1] - 128.0            # [-128, 127]
+        b_center = lab_px[:, 2] - 128.0            # [-128, 127]
 
-        # k-means
+        valid_mask = (
+            (l_scaled > 20) &
+            (l_scaled < 95) &
+            (np.abs(a_center) + np.abs(b_center) > 15)
+        )
+        valid_bgr_px = crop_resized.reshape(-1, 3)[valid_mask].astype(np.float32)
+
+        # Fallback: if outlier rejection removed too many pixels, use all
+        pixels = valid_bgr_px if len(valid_bgr_px) >= 10 else crop_resized.reshape(-1, 3).astype(np.float32)
+
+        # ---- k-means on surviving pixels -----------------------------------
         n_pixels = len(pixels)
         k_actual = min(k, n_pixels)
         if k_actual < 1:
@@ -157,9 +220,8 @@ def extract_color(
         counts = np.bincount(labels.flatten(), minlength=k_actual)
         dominant_bgr = centers[int(np.argmax(counts))]
 
-        # Convert to LAB
+        # Convert to LAB and find nearest palette name
         dominant_lab = _bgr_to_lab(dominant_bgr.reshape(1, 3))[0]
-
         return _nearest_lab_name(dominant_lab)
 
     except Exception:
