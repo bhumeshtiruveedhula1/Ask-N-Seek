@@ -148,6 +148,10 @@ _RAW: list[str] = [
     # --- Sports / Recreation ---
     "ball", "football", "basketball", "baseball", "volleyball",
     "rugby", "cricket bat", "baseball bat", "tennis racket", "badminton racket",
+    "hockey stick",    # specific: replaces ambiguous "stick" → sharper spatial embedding
+    "fishing rod",     # specific: replaces ambiguous "rod"
+    "tennis net",      # specific: replaces ambiguous "net" (was activating on grid patterns)
+    "skateboard",      # specific: replaces ambiguous "board"
 
     "net", "goal", "goalpost", "basket", "hoop",
     "pads", "cleats", "jersey",
@@ -344,12 +348,22 @@ SYNONYM_MAP: dict[str, str] = {
     "kutta":         "dog",
     "billi":         "cat",
 
-    # Disambiguate attractor classes (Task 3)
-    # "bat" has two meanings: animal-bat and sports bat.
-    # YOLO-World's "bat" embedding activates on bottles/cylindrical objects.
-    # Remapping to "baseball bat" uses a more discriminative text embedding
-    # that is spatially anchored (held by humans, near hands/shoulder).
-    "bat":           "baseball bat",
+    # -----------------------------------------------------------------------
+    # Ambiguous-class disambiguation (Task 1)
+    # -----------------------------------------------------------------------
+    # These single-word terms are YOLO-World attractor classes: their zero-shot
+    # text embeddings are too broad and activate on visually similar but
+    # semantically unrelated objects. Replacing them with compound terms
+    # uses CLIP's richer spatial/contextual anchors, sharply reducing FP rate.
+    #
+    # Keys are what YOLO may output; values are specific vocab terms.
+    # These are also applied at QUERY time via resolve_synonym(), so searching
+    # "stick" correctly searches "hockey stick".
+    "bat":           "baseball bat",   # activates on bottles, cylindrical objects
+    "stick":         "hockey stick",   # activates on poles, brooms, wires
+    "rod":           "fishing rod",    # activates on thin cylinders (pipes, tubes)
+    "net":           "tennis net",     # activates on grid/mesh patterns
+    "board":         "skateboard",     # activates on flat rectangles (tables, floors)
 }
 
 

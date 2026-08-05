@@ -158,19 +158,25 @@ MIN_FRAME_PRESENCE: int = 2
 # ---------------------------------------------------------------------------
 # These classes are high-variance open-vocab attractors in YOLO-World:
 # their zero-shot embeddings activate on visually similar but unrelated objects.
-# A higher confidence gate suppresses these hallucinations while keeping
+# A higher confidence gate suppresses hallucinations while keeping
 # the global EARLY_CONFIDENCE_FILTER at 0.30 for all other classes.
 #
 # IMPORTANT: keys must match POST-canonicalization class names (after SYNONYM_MAP).
 # "bat" maps to "baseball bat" via SYNONYM_MAP, so the key is "baseball bat".
-CLASS_CONFIDENCE_GATES: dict[str, float] = {
-    "baseball bat": 0.45,  # "bat" → "baseball bat" via SYNONYM_MAP; activates on bottles/sticks
-    "kite":         0.45,  # Activates on triangular geometries (road signs, flags)
-    "skis":         0.45,  # Activates on long thin objects (pipes, rails)
-    "frisbee":      0.45,  # Activates on circular flat objects (plates, wheels)
-    "rod":          0.45,  # Activates on cylindrical objects (poles, tubes)
-    "stick":        0.45,  # Activates on thin linear objects (wires, pipes)
-}
+HIGH_VARIANCE_CLASSES: frozenset[str] = frozenset({
+    "baseball bat",  # "bat" → "baseball bat" via SYNONYM_MAP; activates on bottles/sticks
+    "hockey stick",  # "stick" → "hockey stick"; activates on poles, brooms, wires
+    "fishing rod",   # "rod" → "fishing rod"; activates on thin cylinders (pipes, tubes)
+    "tennis net",    # "net" → "tennis net"; activates on grid/mesh patterns
+    "skateboard",    # "board" → "skateboard"; activates on flat rectangles
+    "kite",          # activates on triangular geometries (road signs, flags)
+    "skis",          # activates on long thin objects (pipes, rails)
+    "frisbee",       # activates on circular flat objects (plates, wheels)
+})
+
+# Auto-generated — add a class to HIGH_VARIANCE_CLASSES and the gate applies automatically
+CLASS_CONFIDENCE_GATES: dict[str, float] = {cls: 0.45 for cls in HIGH_VARIANCE_CLASSES}
+
 
 
 
