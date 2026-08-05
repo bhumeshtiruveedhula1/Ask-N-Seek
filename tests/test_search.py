@@ -28,29 +28,64 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
-from qdrant_client import QdrantClient
 
-from engine.stub_data import STUB_COLLECTION, get_stub_client, seed_stub_collection
+from engine.storage import insert_detections, delete_video, init_db
 from engine.stub_parser import parse_query_stub
 from engine.search import search_structured, Result
 from engine.explanation import generate_explanation
 from engine.calibration import calibrate_threshold
+
+# Shared video_id for all test data seeded here
+_TEST_VID = "__test_stub_vid__"
+
+# ---------------------------------------------------------------------------
+# Stub data — mirrors the old stub_data.py payload exactly so all assertions pass
+# ---------------------------------------------------------------------------
+_STUB_DETECTIONS = [
+    # Frames with a red-clothed person (for TestPersonInRed)
+    {"id":"s01","timestamp":1.0,"scene_id":0,"frame_index":0,"class_name":"person","color":"red","confidence":0.85,"bbox":[10,10,50,100],"spatial_relations":[]},
+    # Frame with person + helmet (for TestPersonWithoutHelmet — should be EXCLUDED)
+    {"id":"s02","timestamp":2.0,"scene_id":0,"frame_index":1,"class_name":"person","color":"blue","confidence":0.80,"bbox":[10,10,50,100],"spatial_relations":[]},
+    {"id":"s03","timestamp":2.0,"scene_id":0,"frame_index":1,"class_name":"helmet","color":"white","confidence":0.75,"bbox":[15,5,40,25],"spatial_relations":[]},
+    # Frame with person and NO helmet (for TestPersonWithoutHelmet — should be INCLUDED)
+    {"id":"s04","timestamp":3.0,"scene_id":1,"frame_index":2,"class_name":"person","color":"green","confidence":0.88,"bbox":[20,20,60,120],"spatial_relations":[]},
+    # Frame with 2 people (for TestTwoPeople)
+    {"id":"s05","timestamp":4.0,"scene_id":2,"frame_index":3,"class_name":"person","color":"black","confidence":0.82,"bbox":[5,5,40,90],"spatial_relations":[]},
+    {"id":"s06","timestamp":4.0,"scene_id":2,"frame_index":3,"class_name":"person","color":"gray","confidence":0.79,"bbox":[50,5,90,90],"spatial_relations":[]},
+    # Frame with person left_of car (for TestPersonLeftOfCar)
+    {"id":"s07","timestamp":5.0,"scene_id":3,"frame_index":4,"class_name":"person","color":"navy","confidence":0.86,"bbox":[10,10,50,100],"spatial_relations":[{"subject":"person","relation":"left_of","object_":"car"}]},
+    {"id":"s08","timestamp":5.0,"scene_id":3,"frame_index":4,"class_name":"car","color":"silver","confidence":0.90,"bbox":[60,20,200,150],"spatial_relations":[]},
+]
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(scope="module", autouse=True)
+def seed_sqlite():
+    """Seed SQLite with stub detections; teardown after module."""
+    init_db()
+    delete_video(_TEST_VID)   # clean slate
+    insert_detections(_TEST_VID, _STUB_DETECTIONS)
+    yield
+    delete_video(_TEST_VID)
+
+
+# Legacy fixture — kept for any test that was using client arg
 @pytest.fixture(scope="module")
-def client() -> QdrantClient:
-    """In-memory Qdrant client seeded with stub data (shared across tests)."""
-    return get_stub_client()
+def client():
+    """Dummy — SQLite needs no client object."""
+    return None
 
 
-def _search(query: str, client: QdrantClient) -> list[Result]:
-    """Helper: parse + search."""
+def _search(query: str, client=None) -> list[Result]:
+    """Helper: parse + search against test video."""
     fd = parse_query_stub(query)
-    return search_structured(fd, client, STUB_COLLECTION)
+    # Inject video_id so search is scoped to test data
+    if fd.get("status") == "match" and fd.get("filters"):
+        fd["filters"]["video_id"] = _TEST_VID
+    return search_structured(fd)
 
 
 # ---------------------------------------------------------------------------
