@@ -289,8 +289,9 @@ class LiveIngestor:
             filtered = [d for d in all_dets if d.get("confidence", 0) >= ecf]
             n_dropped = len(all_dets) - len(filtered)
             if n_dropped:
-                self._log(f"Early-conf filter: dropped {n_dropped} dets from {os.path.basename(fp)}")
-                detections_map[fp] = filtered
+                logger.debug("Early-conf filter: dropped %d dets from %s", n_dropped, os.path.basename(fp))
+            detections_map[fp] = filtered
+
 
         # ── Optimization 2: Parallel color extraction per frame ──────────
         # Each frame's detections are color-extracted in parallel using a
