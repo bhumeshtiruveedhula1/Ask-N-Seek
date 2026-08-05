@@ -241,10 +241,14 @@ class LiveIngestor:
                 raw_cls = det.get("class", "unknown")
                 det["class"] = SYNONYM_MAP.get(raw_cls, raw_cls)
 
-            # Fix B: Secondary NMS — IoU 0.55 catches small-object duplicates
-            # (glasses, watch, necklace) that sit at IoU 0.55-0.64, below the
-            # old 0.65 threshold. Same-object YOLO duplicates are still merged.
-            dets = _deduplicate_detections(dets, iou_thresh=0.55)
+            # Fix B / Task 2: Conditional NMS — accessories need tighter dedup.
+            # Necklace/glasses on a face have IoU ~0.40-0.50; the global 0.55
+            # threshold misses them. Non-accessories keep the standard 0.55.
+            _ACCESSORY_CLASSES = {"necklace", "glasses", "watch", "bracelet", "earring"}
+            if any(d.get("class", "") in _ACCESSORY_CLASSES for d in dets):
+                dets = _deduplicate_detections(dets, iou_thresh=0.40)
+            else:
+                dets = _deduplicate_detections(dets, iou_thresh=0.55)
             detections_map[frame_path] = dets
             obj_count += len(dets)
 
@@ -291,17 +295,24 @@ class LiveIngestor:
         _color_phase_start = time.time()
         yield _progress("color", 60, "Extracting dominant colors…", stats)
 
-        # ── Optimization 1: Early confidence filter ──────────────────────
-        # Drop low-confidence detections BEFORE color extraction and spatial.
-        # Reduces wasted cv2/k-means work. Threshold is well below THRESHOLD
-        # (0.3197) so near-threshold hits are preserved.
-        ecf = getattr(_config, "EARLY_CONFIDENCE_FILTER", 0.15)
+        # Task 1: Per-class confidence gates.
+        # CLASS_CONFIDENCE_GATES overrides EARLY_CONFIDENCE_FILTER for attractor
+        # classes (bat, kite, skis, frisbee, rod, stick) that hallucinate at
+        # confidence 0.30-0.44. Keys match post-canonicalization names.
+        ecf   = getattr(_config, "EARLY_CONFIDENCE_FILTER", 0.30)
+        gates = getattr(_config, "CLASS_CONFIDENCE_GATES", {})
         for fp in list(detections_map.keys()):
             all_dets = detections_map[fp]
-            filtered = [d for d in all_dets if d.get("confidence", 0) >= ecf]
+            filtered = []
+            for d in all_dets:
+                conf     = d.get("confidence", 0)
+                cls_name = d.get("class", "")
+                gate     = gates.get(cls_name, ecf)  # per-class or global floor
+                if conf >= gate:
+                    filtered.append(d)
             n_dropped = len(all_dets) - len(filtered)
             if n_dropped:
-                logger.debug("Early-conf filter: dropped %d dets from %s", n_dropped, os.path.basename(fp))
+                logger.debug("Conf gate: dropped %d dets from %s", n_dropped, os.path.basename(fp))
             detections_map[fp] = filtered
 
 

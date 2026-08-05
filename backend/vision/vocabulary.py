@@ -147,7 +147,8 @@ _RAW: list[str] = [
 
     # --- Sports / Recreation ---
     "ball", "football", "basketball", "baseball", "volleyball",
-    "rugby", "cricket bat", "tennis racket", "badminton racket",
+    "rugby", "cricket bat", "baseball bat", "tennis racket", "badminton racket",
+
     "net", "goal", "goalpost", "basket", "hoop",
     "pads", "cleats", "jersey",
     "treadmill", "dumbbell", "barbell", "kettlebell",
@@ -342,6 +343,13 @@ SYNONYM_MAP: dict[str, str] = {
     "baccha":        "child",
     "kutta":         "dog",
     "billi":         "cat",
+
+    # Disambiguate attractor classes (Task 3)
+    # "bat" has two meanings: animal-bat and sports bat.
+    # YOLO-World's "bat" embedding activates on bottles/cylindrical objects.
+    # Remapping to "baseball bat" uses a more discriminative text embedding
+    # that is spatially anchored (held by humans, near hands/shoulder).
+    "bat":           "baseball bat",
 }
 
 

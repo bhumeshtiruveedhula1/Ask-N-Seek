@@ -153,6 +153,26 @@ EARLY_CONFIDENCE_FILTER: float = 0.30
 # Set to 1 to disable this filter (show all classes including single-frame detections).
 MIN_FRAME_PRESENCE: int = 2
 
+# ---------------------------------------------------------------------------
+# Per-class confidence gates (overrides EARLY_CONFIDENCE_FILTER for specific classes)
+# ---------------------------------------------------------------------------
+# These classes are high-variance open-vocab attractors in YOLO-World:
+# their zero-shot embeddings activate on visually similar but unrelated objects.
+# A higher confidence gate suppresses these hallucinations while keeping
+# the global EARLY_CONFIDENCE_FILTER at 0.30 for all other classes.
+#
+# IMPORTANT: keys must match POST-canonicalization class names (after SYNONYM_MAP).
+# "bat" maps to "baseball bat" via SYNONYM_MAP, so the key is "baseball bat".
+CLASS_CONFIDENCE_GATES: dict[str, float] = {
+    "baseball bat": 0.45,  # "bat" → "baseball bat" via SYNONYM_MAP; activates on bottles/sticks
+    "kite":         0.45,  # Activates on triangular geometries (road signs, flags)
+    "skis":         0.45,  # Activates on long thin objects (pipes, rails)
+    "frisbee":      0.45,  # Activates on circular flat objects (plates, wheels)
+    "rod":          0.45,  # Activates on cylindrical objects (poles, tubes)
+    "stick":        0.45,  # Activates on thin linear objects (wires, pipes)
+}
+
+
 
 # ---------------------------------------------------------------------------
 # Gradio
