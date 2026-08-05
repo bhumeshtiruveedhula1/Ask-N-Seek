@@ -166,22 +166,51 @@ def _normalise_parse_result(result) -> dict:
         return {"status": "no_match", "filters": {}}
 
     # Branch B: build stub-flat filters from ParseResult fields
-    # Primary object: first non-negated object spec
-    positive = [o for o in objects if not o.get("negated")]
-    primary  = positive[0] if positive else (objects[0] if objects else {})
-
-    # Sanitize BEFORE reading color from primary — these mutate result.objects in place.
-    # _sanitize_person_color strips color from person when another object claims it.
-    # _sanitize_spatial_subject redirects clothing spatial subjects to person.
+    # Sanitize BEFORE selecting primary — these mutate result.objects in place.
     _sanitize_spatial_subject(result)
     _sanitize_person_color(result)
 
-    # Re-resolve primary after mutations (objects list may have been updated)
-    positive = [o for o in objects if not o.get("negated")]
-    primary  = positive[0] if positive else (objects[0] if objects else {})
+    # ── Pick primary object: most constrained wins ─────────────────────────
+    # "person near red car" → search for red car, not generic person.
+    # The frame with a red car also contains the person, so results are correct.
+    # All person-roles (post SYNONYM_MAP at ingest) treated as person for selection.
+    _PERSON_CLASSES = {
+        "person", "man", "woman", "child", "people", "pedestrian",
+        "firefighter", "traffic warden", "police", "officer", "soldier",
+        "worker", "construction worker", "chef", "doctor", "nurse",
+        "patient", "student", "teacher",
+    }
 
-    class_filter = primary.get("class_name")  or None
-    color_filter = primary.get("color")        or None
+    candidates = [o for o in objects if not o.get("negated")]
+    if not candidates:
+        candidates = list(objects)  # all negated — use all as fallback
+
+    primary = None
+    if len(candidates) == 1:
+        primary = candidates[0]
+    else:
+        # Prefer: colored non-person, non-clothing object ("person near red car" → red car)
+        for o in candidates:
+            if (o.get("color")
+                    and o.get("class_name") not in _PERSON_CLASSES
+                    and o.get("class_name") not in _CLOTHING_ITEMS):
+                primary = o
+                break
+        # Fallback: any non-person, non-clothing candidate ("person left of car" → car)
+        if primary is None:
+            for o in candidates:
+                if (o.get("class_name") not in _PERSON_CLASSES
+                        and o.get("class_name") not in _CLOTHING_ITEMS):
+                    primary = o
+                    break
+        # Final fallback: first candidate ("person without helmet" → person)
+        if primary is None:
+            primary = candidates[0]
+
+    class_filter = primary.get("class_name") if primary else None
+    color_filter = primary.get("color")       if primary else None
+
+
 
     # Negated classes: all objects where negated=True
     negated_classes = [
