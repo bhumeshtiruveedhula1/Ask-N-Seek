@@ -354,6 +354,24 @@ SYNONYM_MAP: dict[str, str] = {
     "kutta":         "dog",
     "billi":         "cat",
 
+    # ── Person-role normalization ──────────────────────────────────────────
+    # YOLO-World detects specific occupational roles; users query generically.
+    # Map all human roles → "person" at ingestion so "person without helmet"
+    # finds firefighters, police, workers, etc.
+    "firefighter":          "person",
+    "traffic warden":       "person",
+    "police":               "person",
+    "officer":              "person",
+    "soldier":              "person",
+    "worker":               "person",
+    "construction worker":  "person",
+    "chef":                 "person",
+    "doctor":               "person",
+    "nurse":                "person",
+    "patient":              "person",
+    "student":              "person",
+    "teacher":              "person",
+
     # -----------------------------------------------------------------------
     # Ambiguous-class disambiguation (Task 1)
     # -----------------------------------------------------------------------
