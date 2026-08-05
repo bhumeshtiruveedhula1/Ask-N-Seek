@@ -37,6 +37,7 @@ from qdrant_client.models import Distance, PointStruct, VectorParams
 from backend.ingestion.extraction_engine import extract_frames
 from backend.vision.color_extractor import extract_color
 from backend.vision.object_detector import get_detector, ObjectDetector
+from backend.vision.vocabulary import SYNONYM_MAP
 from engine.qdrant_gateway import make_judge_collection_name
 
 logger = logging.getLogger(__name__)
@@ -230,9 +231,20 @@ class LiveIngestor:
 
             # Object detection
             dets = self._detector.detect_keyframe(frame_path)
-            # Fix 1: Secondary NMS — collapse same-object YOLO duplicates
-            # before count tracking, color extraction, and Qdrant storage.
-            dets = _deduplicate_detections(dets, iou_thresh=0.65)
+
+            # Fix A: Canonicalize class names at ingestion using SYNONYM_MAP.
+            # YOLO detects "man"/"woman" but Qdrant must store "person" so that
+            # user queries for "person" return results.
+            # Without this, SYNONYM_MAP only helped at query time — the DB had
+            # "man" stored, so "person" filter returned 0 results.
+            for det in dets:
+                raw_cls = det.get("class", "unknown")
+                det["class"] = SYNONYM_MAP.get(raw_cls, raw_cls)
+
+            # Fix B: Secondary NMS — IoU 0.55 catches small-object duplicates
+            # (glasses, watch, necklace) that sit at IoU 0.55-0.64, below the
+            # old 0.65 threshold. Same-object YOLO duplicates are still merged.
+            dets = _deduplicate_detections(dets, iou_thresh=0.55)
             detections_map[frame_path] = dets
             obj_count += len(dets)
 
@@ -396,7 +408,7 @@ class LiveIngestor:
                 class_frames[cls] = class_frames.get(cls, 0) + 1
                 class_peak[cls]   = max(class_peak.get(cls, 0), peak)
 
-        top_classes = sorted(
+        top_classes_raw = sorted(
             [
                 {
                     "class":           cls,
@@ -407,7 +419,20 @@ class LiveIngestor:
                 for cls in class_frames
             ],
             key=lambda x: -x["frames_detected"],
-        )[:10]
+        )
+
+        # Fix C: Suppress single-frame hallucinations from quick chips.
+        # Classes seen in only 1 frame are almost certainly false positives
+        # from YOLO-World's zero-shot mode on unfamiliar objects.
+        min_frames = getattr(_config, "MIN_FRAME_PRESENCE", 2)
+        top_classes = [c for c in top_classes_raw if c["frames_detected"] >= min_frames]
+        filtered_count = len(top_classes_raw) - len(top_classes)
+        if filtered_count:
+            filtered_names = [c["class"] for c in top_classes_raw
+                              if c["frames_detected"] < min_frames]
+            logger.debug("Filtered %d single-frame class(es) from top_classes: %s",
+                         filtered_count, filtered_names)
+        top_classes = top_classes[:10]
 
         stats["collection"]      = self._collection
         stats["top_classes"]     = top_classes

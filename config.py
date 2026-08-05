@@ -148,6 +148,10 @@ MIN_KEYFRAME_INTERVAL_S: float = 2.0
 # Must be well below THRESHOLD (0.3197) to preserve near-threshold hits.
 EARLY_CONFIDENCE_FILTER: float = 0.30
 
+# Minimum number of frames a class must appear in to show up in top_classes.
+# Classes seen in only 1 frame are very likely YOLO-World zero-shot hallucinations.
+# Set to 1 to disable this filter (show all classes including single-frame detections).
+MIN_FRAME_PRESENCE: int = 2
 
 
 # ---------------------------------------------------------------------------
