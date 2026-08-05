@@ -1,5 +1,5 @@
 """
-engine/calibration.py — Threshold calibration harness for Odysseus Part 3.
+engine/calibration.py — Threshold calibration harness for Ask-N-Seek.
 
 Milestone 1: Harness exists and runs against stub data. Threshold is placeholder 0.5.
 Milestone 2: Run against real indexed footage. Lock threshold. Update threshold_config.json.
@@ -14,6 +14,8 @@ Calibration procedure (per spec):
 Run standalone:
     python -m engine.calibration --data-source stub
     python -m engine.calibration --data-source real --output threshold_config.json
+
+Storage: SQLite (engine.storage). No Qdrant dependency.
 """
 
 from __future__ import annotations
@@ -25,16 +27,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from qdrant_client import QdrantClient
-
 from config import (
     PLACEHOLDER_THRESHOLD,
     STUB_COLLECTION,
     THRESHOLD_CONFIG_PATH,
-    QDRANT_COLLECTION,
 )
 from engine.search import search_structured
-from engine.stub_data import get_stub_client
 from engine.stub_parser import parse_query_stub
 
 logger = logging.getLogger(__name__)
@@ -42,10 +40,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Parser function pointer
 # ---------------------------------------------------------------------------
-# TODO: SWAP FOR ACHILLES — replace parse_query_stub with Achilles's parser:
-#   from achilles.parser import parse_query as _achilles_parse
-#   _PARSE_FN = _achilles_parse
-# (Or set PARSER_MODULE / PARSER_FUNCTION in config.py and use parser_gateway)
 _PARSE_FN = parse_query_stub
 
 
@@ -82,7 +76,8 @@ NONSENSE_QUERIES: list[str] = [
 # ---------------------------------------------------------------------------
 
 def calibrate_threshold(
-    client: QdrantClient | None = None,
+    # Legacy Qdrant args — ignored, kept for call-site compat
+    client=None,
     collection_name: str = STUB_COLLECTION,
     margin: float = 0.05,
     save: bool = True,
@@ -94,10 +89,9 @@ def calibrate_threshold(
 
     Parameters
     ----------
-    client : QdrantClient | None
-        Qdrant client to query. If None, uses the in-memory stub client.
+    client : ignored (legacy Qdrant arg, kept for compat)
     collection_name : str
-        Collection to run queries against.
+        Used for metadata annotation in the JSON only.
     margin : float
         Safety margin added to max(nonsense_scores). Default 0.05.
     save : bool
@@ -106,30 +100,27 @@ def calibrate_threshold(
         Override the default threshold_config.json path.
     parse_fn : callable | None
         Parser function pointer. Defaults to _PARSE_FN (stub parser).
-        Pass a real parser here for production calibration.
 
     Returns
     -------
     float
         Calibrated threshold value.
     """
-    if client is None:
-        client = get_stub_client()
     if parse_fn is None:
         parse_fn = _PARSE_FN
     if output_path is None:
         output_path = THRESHOLD_CONFIG_PATH
 
-    logger.info("Starting threshold calibration (margin=%.2f, collection=%s).",
+    logger.info("Starting threshold calibration (margin=%.2f, source=%s).",
                 margin, collection_name)
 
     # -----------------------------------------------------------------------
-    # Run valid queries
+    # Run valid queries (against SQLite — returns [] if no data, score=0.0)
     # -----------------------------------------------------------------------
     valid_scores: list[float] = []
     for query in VALID_QUERIES:
         filter_dict = parse_fn(query)
-        results = search_structured(filter_dict, client, collection_name)
+        results = search_structured(filter_dict)
         best = results[0].confidence_score if results else 0.0
         valid_scores.append(best)
         logger.debug("VALID  '%s' → best=%.3f", query, best)
@@ -140,7 +131,7 @@ def calibrate_threshold(
     nonsense_scores: list[float] = []
     for query in NONSENSE_QUERIES:
         filter_dict = parse_fn(query)
-        results = search_structured(filter_dict, client, collection_name)
+        results = search_structured(filter_dict)
         best = results[0].confidence_score if results else 0.0
         nonsense_scores.append(best)
         logger.debug("NONSENSE '%s' → best=%.3f", query, best)
@@ -187,9 +178,8 @@ def calibrate_threshold(
         "nonsense_queries": NONSENSE_QUERIES,
         "collection":       collection_name,
         "note": (
-            "Milestone 2 stub run — recalibrate against real footage for production."
-            if collection_name == STUB_COLLECTION
-            else "Production calibration against real Qdrant collection."
+            "Calibration run against SQLite storage. "
+            "Re-run after ingesting real footage for production threshold."
         ),
     }
 
@@ -215,8 +205,8 @@ def _build_cli() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m engine.calibration",
         description=(
-            "Odysseus Part 3 — Threshold Calibration Harness\n"
-            "Runs 10 valid + 5 nonsense queries against a Qdrant collection\n"
+            "Ask-N-Seek — Threshold Calibration Harness\n"
+            "Runs 10 valid + 5 nonsense queries against SQLite storage\n"
             "and writes threshold_config.json."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -226,8 +216,8 @@ def _build_cli() -> argparse.ArgumentParser:
         choices=["stub", "real"],
         default="stub",
         help=(
-            "stub: use in-memory stub data (default, always works).\n"
-            "real: connect to real Qdrant using QDRANT_HOST/PORT in config.py."
+            "stub: no extra data needed (queries return 0 results if no video ingested).\n"
+            "real: same — reads from SQLite, which is always populated by ingestion."
         ),
     )
     parser.add_argument(
@@ -259,28 +249,9 @@ if __name__ == "__main__":
 
     output_path = Path(args.output)
 
-    if args.data_source == "stub":
-        print(f"\n{'-'*50}")
-        print("Data source: in-memory STUB (engine.stub_data)")
-        print(f"{'-'*50}")
-        client         = get_stub_client()
-        collection     = STUB_COLLECTION
-
-    else:  # real
-        print(f"\n{'-'*50}")
-        print("Data source: REAL Qdrant")
-        print(f"   Collection : {QDRANT_COLLECTION}")
-        print(f"{'-'*50}")
-        import config as _cfg
-        from qdrant_client import QdrantClient as _QC
-        client     = _QC(
-            host=_cfg.QDRANT_HOST,
-            port=_cfg.QDRANT_PORT,
-            api_key=_cfg.QDRANT_API_KEY or None,
-            timeout=10,
-        )
-        collection = QDRANT_COLLECTION
-
+    print(f"\n{'-'*50}")
+    print("Ask-N-Seek Calibration — SQLite storage")
+    print(f"{'-'*50}")
     print("\nRunning calibration queries...\n")
 
     # Print per-query scores
@@ -289,21 +260,19 @@ if __name__ == "__main__":
 
     for q in VALID_QUERIES:
         fd      = _PARSE_FN(q)
-        results = search_structured(fd, client, collection)
+        results = search_structured(fd)
         score   = results[0].confidence_score if results else 0.0
         print(f"  {q:<33} {score:>10.3f}  [valid]")
 
     for q in NONSENSE_QUERIES:
         fd      = _PARSE_FN(q)
-        results = search_structured(fd, client, collection)
+        results = search_structured(fd)
         score   = results[0].confidence_score if results else 0.0
         print(f"  {q:<33} {score:>10.3f}  [nonsense]")
 
     print("-" * 55)
 
     t = calibrate_threshold(
-        client=client,
-        collection_name=collection,
         margin=args.margin,
         save=True,
         output_path=output_path,
@@ -313,4 +282,3 @@ if __name__ == "__main__":
     print(f"  Calibrated threshold : {t:.4f}")
     print(f"  Written to           : {output_path}")
     print(f"{'='*50}\n")
-

@@ -52,8 +52,7 @@ def run_diagnosis(
     ----------
     filters : dict
         Stub-flat filters dict (class, color, negated, spatial_relation, count_constraint).
-    client : QdrantClient
-    collection_name : str
+    _client, _collection_name : ignored (legacy Qdrant args, kept for call-site compat)
 
     Returns
     -------
