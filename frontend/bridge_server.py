@@ -561,6 +561,11 @@ async def ingest_start(video: UploadFile = File(...)):
             "_start_time":          time.monotonic(),
         }
 
+    # Clear query cache immediately — new video means old results are stale
+    if _query_cache is not None:
+        _query_cache.clear()
+        logger.info("Query cache cleared on new ingestion start (job_id=%s)", job_id)
+
     # Launch background thread
     t = threading.Thread(
         target=_run_ingestion_job,
@@ -569,6 +574,7 @@ async def ingest_start(video: UploadFile = File(...)):
         name=f"ingest-{job_id}",
     )
     t.start()
+
 
     return {
         "job_id":    job_id,

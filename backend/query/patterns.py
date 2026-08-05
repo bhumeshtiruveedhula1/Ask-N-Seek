@@ -121,11 +121,11 @@ def parse_count_token(raw: str | None, pattern_idx: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Spatial  (left_of / right_of ONLY — Architecture_Final §6 locked)
+# Spatial  (left_of / right_of / near — Architecture_Final §6 + Bug 2b fix)
 # ---------------------------------------------------------------------------
 
 SPATIAL_TRIGGERS: list[tuple[re.Pattern, str]] = [
-    # LEFT / RIGHT ONLY — locked per Architecture_Final_v2.4.1 §6
+    # LEFT / RIGHT — locked per Architecture_Final_v2.4.1 §6
     (re.compile(r"\bleft\s+of\b",              re.I), "left_of"),
     (re.compile(r"\bto\s+the\s+left\s+of\b",  re.I), "left_of"),
     (re.compile(r"\bon\s+the\s+left\s+of\b",   re.I), "left_of"),
@@ -134,16 +134,22 @@ SPATIAL_TRIGGERS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bto\s+the\s+right\s+of\b", re.I), "right_of"),
     (re.compile(r"\bon\s+the\s+right\s+of\b",  re.I), "right_of"),
     (re.compile(r"\bto\s+(?:its|the|a)\s+right\b", re.I), "right_of"),
+
+    # NEAR — re-enabled with relative diagonal threshold (Bug 2b fix)
+    # spatial.py computes gap/diag < SPATIAL_NEAR_RATIO (default 0.15)
+    (re.compile(r"\bnear\b",           re.I), "near"),
+    (re.compile(r"\bnear\s+to\b",      re.I), "near"),
+    (re.compile(r"\bnext\s+to\b",      re.I), "near"),
+    (re.compile(r"\bbeside\b",         re.I), "near"),
+    (re.compile(r"\bclose\s+to\b",     re.I), "near"),
 ]
 
-# Spatial relations that are NOT recognized — "near", "touching", "beside",
-# "close to", "grabbing", "holding", "pulling", "opening" are intentionally
-# excluded. 2D IoU/edge-gap heuristics produce false positives on single
-# camera angle footage. Locked out per Architecture_Final_v2.4.1 §6.
+# Still banned: touching/grabbing/holding/pulling/opening
+# 2D IoU heuristics produce too many false positives on single-camera footage.
 _BANNED_SPATIAL: list[str] = [
-    "near", "beside", "close to", "next to", "near to",
     "touching", "grabbing", "holding", "pulling", "opening",
 ]
+
 
 
 # ---------------------------------------------------------------------------

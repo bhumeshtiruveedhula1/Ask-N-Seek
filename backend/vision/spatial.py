@@ -70,9 +70,10 @@ def compute_spatial_relations(
     """
     Compute spatial relations for detected objects in a single frame.
 
-    LOCKED SCOPE: left_of / right_of ONLY (Architecture_Final_v2.4.1 §6).
-    touching / near removed — 2D IoU/edge-gap heuristics produce false positives
-    from single camera angle footage and are excluded from the demo build.
+    LOCKED SCOPE (Architecture_Final_v2.4.1 §6):
+      - left_of / right_of: top-4 confidence pairs, centroid comparison.
+      - near: relative edge-gap < SPATIAL_NEAR_RATIO * frame diagonal (resolution-independent).
+      - touching / grabbing / holding / opening: NOT implemented (2D IoU FP rate too high).
 
     Parameters
     ----------
@@ -119,5 +120,30 @@ def compute_spatial_relations(
                     object_=det_a['class'],
                     object_idx=idx_a,
                 ))
+
+    # ── Near — relative threshold (resolution-independent) ────────────────────
+    # Edge gap expressed as fraction of frame diagonal avoids the old
+    # absolute-50px bug that failed across different video resolutions.
+    if detections:
+        max_x = max(d["bbox"][2] for d in detections)
+        max_y = max(d["bbox"][3] for d in detections)
+        diag = (max_x ** 2 + max_y ** 2) ** 0.5
+        if diag > 0:
+            near_ratio = float(getattr(_config, "SPATIAL_NEAR_RATIO", 0.15))
+            for i, (idx_a, det_a) in enumerate(indexed):
+                bbox_a = det_a.get("bbox", (0, 0, 0, 0))
+                for j, (idx_b, det_b) in enumerate(indexed):
+                    if i == j:
+                        continue
+                    bbox_b = det_b.get("bbox", (0, 0, 0, 0))
+                    gap = _edge_gap(bbox_a, bbox_b)
+                    if gap / diag < near_ratio:
+                        relations.append(SpatialRelation(
+                            subject=det_a['class'],
+                            subject_idx=idx_a,
+                            relation="near",
+                            object_=det_b['class'],
+                            object_idx=idx_b,
+                        ))
 
     return relations

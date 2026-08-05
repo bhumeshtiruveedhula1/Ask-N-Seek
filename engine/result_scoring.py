@@ -139,23 +139,39 @@ def _score_object(objs: list[dict], filters: dict) -> tuple[int, str]:
 def _score_color(objs: list[dict], filters: dict) -> tuple[int, str]:
     """
     Color score (0-20).
-
-    With color filter : fraction of matched objects that have the target color.
-    Without           : 0 (no constraint applied).
+    Uses same color-family expansion as search.py so "dark blue" scores for query "blue".
     """
     color_filter: str | None = filters.get("color")
 
     if not color_filter:
         return 0, "no color constraint"
 
-    matched_color = sum(1 for o in objs if o.get(_QO) == color_filter)
+    # Mirror the families in search.py — keep both in sync if you update one
+    _COLOR_FAMILIES: dict[str, list[str]] = {
+        "blue":   ["blue", "dark blue", "light blue", "navy"],
+        "red":    ["red", "dark red", "orange-red"],
+        "green":  ["green", "light green", "dark green", "olive"],
+        "yellow": ["yellow", "dark yellow", "gold"],
+        "purple": ["purple", "pink", "hot pink"],
+        "gray":   ["gray", "light gray", "dark gray", "charcoal"],
+        "black":  ["black"],
+        "white":  ["white"],
+        "orange": ["orange", "orange-red"],
+        "brown":  ["brown", "beige", "tan"],
+        "silver": ["silver"],
+        "gold":   ["gold"],
+    }
+    family = set(_COLOR_FAMILIES.get(color_filter, [color_filter]))
+
+    matched_color = sum(1 for o in objs if o.get(_QO) in family)
     total = len(objs)
-    ratio = matched_color / total
+    ratio = matched_color / total if total else 0
     score = round(ratio * 20)
 
     if matched_color > 0:
         return score, f"{color_filter} color confirmed ({matched_color}/{total})"
     return 0, f"color mismatch — expected {color_filter}, got {set(o.get(_QO) for o in objs)}"
+
 
 
 def _score_spatial(objs: list[dict], filters: dict) -> tuple[int, str]:
