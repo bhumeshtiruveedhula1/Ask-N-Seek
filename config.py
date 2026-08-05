@@ -132,13 +132,15 @@ VIDEO_PATH_TEMPLATE: str = os.getenv(
 # ---------------------------------------------------------------------------
 # Keyframe extraction caps (consumed by backend/ingestion/extraction_engine.py)
 # ---------------------------------------------------------------------------
-# Maximum keyframes extracted per scene during the 1-FPS fallback.
-# Prevents long static shots from inflating Qdrant payload and slowing ingestion.
-MAX_KEYFRAMES_PER_SCENE: int = 5
+# Maximum keyframes extracted per scene during the long-shot fallback.
+# Raised from 5 → 40 to ensure dense 3s sampling for demo-critical action frames.
+# A 91s single-scene video now yields ~30 frames (every 3s) vs old 5 frames (every 18s).
+MAX_KEYFRAMES_PER_SCENE: int = 40
 
 # Minimum seconds between evenly-distributed fallback keyframes.
 # Effective interval = scene_duration / n_keyframes  (always >= this floor).
-MIN_KEYFRAME_INTERVAL_S: float = 2.0
+# 3.0s ensures we never generate more frames than needed, but still catch 0:40 action.
+MIN_KEYFRAME_INTERVAL_S: float = 3.0
 
 # ---------------------------------------------------------------------------
 # Ingestion speed optimisation

@@ -50,8 +50,8 @@ logger = logging.getLogger(__name__)
 # Tuneable constants
 # ---------------------------------------------------------------------------
 
-# Any shot longer than this (seconds) gets 1 FPS supplementary frames
-LONG_SHOT_THRESHOLD_S: float = 2.0
+# Any shot longer than this (seconds) gets supplementary frames
+LONG_SHOT_THRESHOLD_S: float = 3.0
 
 # JPEG quality for saved keyframes (0-100)
 JPEG_QUALITY: int = 90
