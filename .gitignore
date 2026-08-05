@@ -26,3 +26,11 @@ frontend/.next/
 frontend/*.tsbuildinfo
 frontend/npm-debug.log*
 frontend/.env.local
+
+# Runtime artifacts — never commit
+bridge.log
+static.log
+temp_frames/
+qdrant_storage/
+.active_collection.json
+*.zip
