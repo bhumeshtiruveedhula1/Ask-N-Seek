@@ -36,6 +36,14 @@ import numpy as np
 from scenedetect import open_video, SceneManager
 from scenedetect.detectors import ContentDetector
 
+# Keyframe-cap constants from central config
+try:
+    from config import MAX_KEYFRAMES_PER_SCENE, MIN_KEYFRAME_INTERVAL_S
+except ImportError:
+    # Fallback defaults if config not on path (e.g. isolated unit tests)
+    MAX_KEYFRAMES_PER_SCENE = 5
+    MIN_KEYFRAME_INTERVAL_S = 2.0
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -241,13 +249,19 @@ def extract_frames(
         # Always extract the scene boundary frame (start of scene)
         timestamps_s.append(scene_start_s)
 
-        # 1 FPS fallback: for long static shots, add intermediate timestamps
+        # Capped fallback: for long static shots, add evenly-distributed keyframes.
+        # Cap = MAX_KEYFRAMES_PER_SCENE; minimum gap = MIN_KEYFRAME_INTERVAL_S.
+        # A 60s scene yields max 5 frames (every 12s) instead of 59 (every 1s).
         if scene_duration_s > LONG_SHOT_THRESHOLD_S:
-            # Start at scene_start + 1.0 s, then every 1 s, stop before end
-            t = scene_start_s + 1.0
-            while t < scene_end_s - 0.1:  # 0.1 s guard to avoid duplicate at boundary
-                timestamps_s.append(t)
-                t += 1.0
+            n_keyframes = min(
+                MAX_KEYFRAMES_PER_SCENE,
+                max(2, int(scene_duration_s / MIN_KEYFRAME_INTERVAL_S)),
+            )
+            interval_s = scene_duration_s / n_keyframes
+            for i in range(1, n_keyframes):  # i=0 is scene_start_s already added above
+                t = scene_start_s + i * interval_s
+                if t < scene_end_s - 0.1:   # 0.1 s guard to avoid duplicate at boundary
+                    timestamps_s.append(t)
 
         # Deduplicate across scenes (floating-point safety: round to 3 decimals)
         unique_timestamps = []

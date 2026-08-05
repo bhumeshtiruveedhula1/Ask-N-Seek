@@ -93,5 +93,13 @@ def compute_spatial_relations(
                     object_=det_b['class'],
                     object_idx=idx_b,
                 ))
+                # INVERSE: obj_b is right_of obj_a
+                relations.append(SpatialRelation(
+                    subject=det_b['class'],
+                    subject_idx=idx_b,
+                    relation="right_of",
+                    object_=det_a['class'],
+                    object_idx=idx_a,
+                ))
 
     return relations

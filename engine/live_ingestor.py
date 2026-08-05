@@ -145,9 +145,16 @@ class LiveIngestor:
         frame_count = 0
         obj_count   = 0
 
+        # Honest count tracking: per-scene peak concurrent detections per class.
+        # scene_max_counts[scene_id][class_name] = max detections in any single frame
+        # scene_class_seen[scene_id] = set of classes that appeared (for frames_detected)
+        scene_max_counts: dict[int, dict[str, int]] = {}
+        scene_class_seen: dict[int, set] = {}
+
         for record in extract_frames(video_path, output_dir):
             frame_records.append(record)
             frame_path = record["frame_path"]
+            scene_id   = record["scene_id"]
             frame_count += 1
 
             # Object detection
@@ -155,8 +162,22 @@ class LiveIngestor:
             detections_map[frame_path] = dets
             obj_count += len(dets)
 
+            # Track per-scene peak counts per class
+            if scene_id not in scene_max_counts:
+                scene_max_counts[scene_id] = {}
+                scene_class_seen[scene_id] = set()
+            frame_class_counts: dict[str, int] = {}
+            for det in dets:
+                cls = det["class"]
+                frame_class_counts[cls] = frame_class_counts.get(cls, 0) + 1
+                scene_class_seen[scene_id].add(cls)
+            for cls, cnt in frame_class_counts.items():
+                scene_max_counts[scene_id][cls] = max(
+                    scene_max_counts[scene_id].get(cls, 0), cnt
+                )
+
             stats = {
-                "scenes":     record["scene_id"] + 1,
+                "scenes":     scene_id + 1,
                 "keyframes":  frame_count,
                 "objects":    obj_count,
                 "collection": self._collection,
@@ -264,7 +285,33 @@ class LiveIngestor:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Temp cleanup failed (non-fatal): %s", exc)
 
-        stats["collection"] = self._collection
+        # ── Honest top_classes aggregation ──────────────────────────────
+        # frames_detected = number of scenes where class was seen (not raw frame count).
+        # max_concurrent  = peak simultaneous detections in any single frame/scene.
+        # count           = alias for frames_detected (backward compat).
+        class_frames: dict[str, int] = {}   # class → scenes where it appeared
+        class_peak:   dict[str, int] = {}   # class → max concurrent in any scene
+        for scene_id, class_map in scene_max_counts.items():
+            for cls, peak in class_map.items():
+                class_frames[cls] = class_frames.get(cls, 0) + 1
+                class_peak[cls]   = max(class_peak.get(cls, 0), peak)
+
+        top_classes = sorted(
+            [
+                {
+                    "class":           cls,
+                    "frames_detected": class_frames[cls],
+                    "max_concurrent":  class_peak[cls],
+                    "count":           class_frames[cls],  # backward compat
+                }
+                for cls in class_frames
+            ],
+            key=lambda x: -x["frames_detected"],
+        )[:10]
+
+        stats["collection"]      = self._collection
+        stats["top_classes"]     = top_classes
+        stats["total_keyframes"] = frame_count
         yield _progress(
             "complete", 100,
             f"Ready to search — {stats['keyframes']} frames, {total_pts} points in {self._collection}",

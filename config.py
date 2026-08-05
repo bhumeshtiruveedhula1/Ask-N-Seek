@@ -130,6 +130,17 @@ VIDEO_PATH_TEMPLATE: str = os.getenv(
 )
 
 # ---------------------------------------------------------------------------
+# Keyframe extraction caps (consumed by backend/ingestion/extraction_engine.py)
+# ---------------------------------------------------------------------------
+# Maximum keyframes extracted per scene during the 1-FPS fallback.
+# Prevents long static shots from inflating Qdrant payload and slowing ingestion.
+MAX_KEYFRAMES_PER_SCENE: int = 5
+
+# Minimum seconds between evenly-distributed fallback keyframes.
+# Effective interval = scene_duration / n_keyframes  (always >= this floor).
+MIN_KEYFRAME_INTERVAL_S: float = 2.0
+
+# ---------------------------------------------------------------------------
 # Gradio
 # ---------------------------------------------------------------------------
 GRADIO_PORT: int = int(os.getenv("GRADIO_PORT", "7860"))

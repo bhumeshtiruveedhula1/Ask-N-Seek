@@ -77,6 +77,7 @@ try:
     from engine.result_scoring import ScoreBreakdown
     from backend.vision.vocabulary import VOCABULARY, VOCABULARY_SET, SYNONYM_MAP
     from backend.query.patterns import COLOR_VOCAB, COLOR_ALIASES
+    from backend.query.query_parser import _preprocess_query as _parser_preprocess
 
     _qdrant_client = get_qdrant_client()
     _collection = get_collection_name()
@@ -139,7 +140,16 @@ def _check_vocab(query: str) -> list[dict]:
     - Candidate must NOT be shorter than original by more than 2 chars
     - SequenceMatcher ratio >= 0.70 required (rejects kurta->curtain, giving->railing)
     - If no high-quality match: type="unknown", suggestion=None (no false suggestions)
+    PROMPT 3 FIX: Apply _preprocess_query first so compound words like
+    'redshirt' are split to 'red shirt' before vocab check, matching the
+    parser's own preprocessing behaviour.
     """
+    # Align with parser preprocessing (compound split + negation normalisation)
+    if _backend_available:
+        try:
+            query = _parser_preprocess(query)
+        except Exception:
+            pass  # non-fatal: fall through to raw check
     punct_trans = str.maketrans(string.punctuation, " " * len(string.punctuation))
     clean_q = query.translate(punct_trans).lower()
     tokens = clean_q.split()
@@ -576,15 +586,15 @@ def ingest_status(job_id: str):
     """Poll ingestion progress. Returns job state including top_classes and elapsed_seconds."""
     with _jobs_lock:
         job = _ingest_jobs.get(job_id)
+        if job is None:
+            return JSONResponse(status_code=404, content={"error": f"Job {job_id} not found"})
 
-    if job is None:
-        return JSONResponse(status_code=404, content={"error": f"Job {job_id} not found"})
-
-    # Don't expose internal keys (prefixed _)
-    safe = {k: v for k, v in job.items() if not k.startswith("_")}
+        # Don't expose internal keys (prefixed _) — dict copy inside the lock
+        safe = {k: v for k, v in job.items() if not k.startswith("_")}
+        # Grab _start_time while still holding the lock
+        start = job.get("_start_time")
 
     # TASK 2: compute live elapsed_seconds even while polling
-    start = job.get("_start_time")
     if start is not None:
         safe["elapsed_seconds"] = round(time.monotonic() - start, 1)
 

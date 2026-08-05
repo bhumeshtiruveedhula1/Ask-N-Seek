@@ -25,8 +25,13 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import TypedDict
+
+# Module-level lock: YOLO-World-M / PyTorch CUDA is not thread-safe.
+# All calls to model.predict() must be serialised through this lock.
+_yolo_inference_lock = threading.Lock()
 
 import cv2
 import numpy as np
@@ -148,14 +153,17 @@ class ObjectDetector:
             logger.info("[GPU] frame=%d  CUDA memory allocated: %.0f MB", self._detect_count, mem_mb)
 
         # -- Run inference (single frame, no streaming, no batch) --------
-        results = self._model.predict(
-            source=frame_bgr,
-            conf=self._conf,
-            iou=self._iou,
-            device=self._device,
-            verbose=False,
-            stream=False,
-        )
+        # Serialize YOLO inference: PyTorch/CUDA is not thread-safe across
+        # concurrent uploads or simultaneous query+upload scenarios.
+        with _yolo_inference_lock:
+            results = self._model.predict(
+                source=frame_bgr,
+                conf=self._conf,
+                iou=self._iou,
+                device=self._device,
+                verbose=False,
+                stream=False,
+            )
 
         if not results or results[0].boxes is None:
             return []

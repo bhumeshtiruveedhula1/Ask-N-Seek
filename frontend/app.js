@@ -162,9 +162,12 @@ function renderQuickChips(topClasses) {
   const top5 = topClasses.slice(0, 5);
   chips.innerHTML = top5.map(item => {
     const cls = item.class || item.class_name || '';
-    const cnt = item.count || 0;
-    return `<button class="quick-chip" onclick="performSearch(${JSON.stringify(cls)})">
-      ${cls}<span class="quick-chip-count">· ${cnt}</span>
+    // Use max_concurrent for honest count; fallback to count for backward compat
+    const maxConcurrent = item.max_concurrent != null ? item.max_concurrent : (item.count || 0);
+    const framesDetected = item.frames_detected != null ? item.frames_detected : (item.count || 0);
+    const tooltip = `Detected in ${framesDetected} frame${framesDetected !== 1 ? 's' : ''}, max ${maxConcurrent} concurrent`;
+    return `<button class="quick-chip" onclick="performSearch(${JSON.stringify(cls)})" title="${tooltip}">
+      ${cls}<span class="quick-chip-count">· ${maxConcurrent}</span>
     </button>`;
   }).join('');
 
@@ -205,15 +208,68 @@ function renderTopObjects(topClasses) {
 
   grid.innerHTML = topClasses.map(item => {
     const cls = item.class || item.class_name || '';
-    const cnt = item.count || 0;
-    return `<div class="top-object-card">
+    const framesDetected = item.frames_detected != null ? item.frames_detected : (item.count || 0);
+    const maxConcurrent  = item.max_concurrent  != null ? item.max_concurrent  : 1;
+    // Tooltip explains the distinction for judges
+    const oneThing = maxConcurrent === 1 && framesDetected > 1;
+    const tooltip = oneThing
+      ? `1 object seen across ${framesDetected} frames`
+      : `Max ${maxConcurrent} at once, detected in ${framesDetected} frames`;
+    return `<div class="top-object-card" title="${tooltip}">
       <span class="top-object-name">${cls}</span>
-      <span class="top-object-sep">·</span>
-      <span class="top-object-count">${cnt}</span>
+      <span class="top-object-sub">detected in ${framesDetected} frame${framesDetected !== 1 ? 's' : ''}</span>
+      <span class="top-object-badge">max ${maxConcurrent} at once</span>
     </div>`;
   }).join('');
 
   section.style.display = 'block';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DYNAMIC SUGGESTIONS (content-aware, post-ingestion)
+// ═══════════════════════════════════════════════════════════════
+function generateSuggestions(topClasses) {
+  const container = document.getElementById('suggestions-container');
+  const row = document.getElementById('dynamic-suggestions');
+  if (!row || !container) return;
+
+  // Build a fast lookup set of detected class names
+  const detected = new Set((topClasses || []).map(i => i.class || i.class_name || ''));
+
+  const chips = [];
+
+  // Person-based queries
+  if (detected.has('person')) {
+    chips.push('person without helmet');
+    chips.push('more than two people');
+  }
+
+  // Vehicle-based spatial query
+  if (detected.has('car')) {
+    chips.push('car left of person');
+  }
+
+  // Bag ownership query
+  if (detected.has('backpack') || detected.has('handbag')) {
+    chips.push('backpack without owner');
+  }
+
+  // Always include diagnosis smoke-test
+  chips.push('purple elephant');
+
+  // Cap at 6
+  const final = chips.slice(0, 6);
+
+  if (final.length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+
+  row.innerHTML = final.map(q =>
+    `<button class="suggestion-chip" data-query="${q}">${q}</button>`
+  ).join('');
+
+  container.style.display = 'block';
 }
 
 function renderIngestStats(stats) {
@@ -400,6 +456,7 @@ function pollIngestionStatus(jobId) {
         if (topClasses.length > 0) {
           renderTopObjects(topClasses);
           renderQuickChips(topClasses);
+          generateSuggestions(topClasses);
         }
         renderIngestStats(data.stats);
 
@@ -463,12 +520,13 @@ function initSearch() {
 
   if (!input) return;
 
-  // Suggestion chips
-  document.querySelectorAll('.suggestion-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
+  // Dynamic suggestion chips (populated after ingestion)
+  document.getElementById('dynamic-suggestions')?.addEventListener('click', (e) => {
+    const chip = e.target.closest('.suggestion-chip');
+    if (chip) {
       input.value = chip.dataset.query;
       performSearch(chip.dataset.query);
-    });
+    }
   });
 
   btn.addEventListener('click', () => {
