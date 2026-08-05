@@ -358,7 +358,8 @@ def test_real_detection() -> None:
               "At least 1 detection across all tested real frames",
               f"total detections = {total_dets}")
 
-    return all_results
+    # all_results intentionally not returned — pytest test functions must return None
+    assert isinstance(all_results, list), "Expected all_results to be a list"
 
 
 # ---------------------------------------------------------------------------

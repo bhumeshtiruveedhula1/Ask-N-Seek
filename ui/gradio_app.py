@@ -25,7 +25,6 @@ import gradio as gr
 import config as _config
 from config import load_threshold
 from engine.parser_gateway import parse_query
-from engine.qdrant_gateway import get_qdrant_client, get_collection_name
 from engine.search import search_structured, Result
 from engine.explanation import generate_explanation
 from engine.diagnosis import run_diagnosis
@@ -45,22 +44,15 @@ from backend.vision.vocabulary import VOCABULARY, VOCABULARY_SET, SYNONYM_MAP
 from backend.query.patterns import COLOR_VOCAB, COLOR_ALIASES
 from engine.query_cache import QueryCache
 from engine.paths import get_video_path, get_frame_path
-try:
-    from engine.stub_data import count_stub_rows as count_stub_row
-except ImportError:
-    try:
-        from engine.stub_data import count_stub_row
-    except ImportError:
-        def count_stub_row() -> int:
-            return 72
+from engine.storage import get_class_counts, get_videos, get_latest_video_id, init_db
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Initialise singletons
+# Initialise singletons — SQLite replaces Qdrant
 # ---------------------------------------------------------------------------
-_QDRANT_CLIENT = get_qdrant_client()
-_COLLECTION = get_collection_name()
+init_db()
+_ACTIVE_VIDEO_ID: str | None = get_latest_video_id()
 _QUERY_CACHE: QueryCache = QueryCache()
 
 # ---------------------------------------------------------------------------
@@ -683,7 +675,7 @@ def process_query(
     history: list[dict] | None = None,
     video_path: str = "",
 ):
-    target_coll = collection_name or _COLLECTION
+    target_vid = collection_name or _ACTIVE_VIDEO_ID
     history_list = list(history or [])
 
     if not query or not query.strip():
@@ -703,7 +695,7 @@ def process_query(
     log: list[tuple[str, str]] = []
 
     # ── Cache hit check ──────────────────────────────────────────────────────
-    cached = _QUERY_CACHE.get(query, target_coll)
+    cached = _QUERY_CACHE.get(query, target_vid or "")
     if cached is not None:
         log_html, res_html, vid_upd, b_html, hist_h, hist_l, pick_upd = cached
         cached_log_html = _log_html([
@@ -772,7 +764,7 @@ def process_query(
         return
 
     # ── Step 2: Search ───────────────────────────────────────────────────────
-    log.append(("info", f"🔎 Searching Qdrant ({target_coll})…"))
+    log.append(("info", f"🔎 Searching SQLite ({target_vid or 'all videos'})…"))
     yield (
         _log_html(log),
         _LOADING_HTML,
@@ -783,7 +775,11 @@ def process_query(
         gr.update(),
     )
 
-    results = search_structured(filter_dict, _QDRANT_CLIENT, target_coll)
+    # Inject video_id into filter so search is scoped to the active video
+    if target_vid and filter_dict.get("status") == "match":
+        filter_dict.setdefault("filters", {})["video_id"] = target_vid
+
+    results = search_structured(filter_dict)
 
     log.append(("muted", f"📦 Found {len(results)} raw result(s)"))
     yield (
@@ -851,8 +847,6 @@ def process_query(
         try:
             diag = run_diagnosis(
                 filter_dict.get("filters", {}),
-                _QDRANT_CLIENT,
-                target_coll,
             )
             diag_html = diag.get("html", _NO_MATCH_HTML) if isinstance(diag, dict) else _NO_MATCH_HTML
         except Exception as exc:
@@ -923,36 +917,24 @@ def process_query(
         history_list,
         gr.update(choices=_picker_choices, value=None, visible=bool(_picker_choices)),
     )
-    _QUERY_CACHE.set(query, target_coll, final_tuple)
+    _QUERY_CACHE.set(query, target_vid or "", final_tuple)
     yield final_tuple
 
 
 # ---------------------------------------------------------------------------
 # Detection summary helper
 # ---------------------------------------------------------------------------
-def _generate_ingest_summary(collection_name: str, client) -> str:
-    if not collection_name:
+def _generate_ingest_summary(video_id: str, _client=None) -> str:
+    """Build an HTML summary of what was detected in the ingested video."""
+    if not video_id:
         return ""
     try:
-        points, _ = client.scroll(
-            collection_name=collection_name,
-            limit=10000,
-            with_payload=True,
-            with_vectors=False,
-        )
+        counts = get_class_counts(video_id)
     except Exception:
         return ""
 
-    if not points:
+    if not counts:
         return ""
-
-    tally: dict[str, dict[str, int]] = {}
-    for pt in points:
-        p = pt.payload or {}
-        cls = p.get("class_name", "unknown")
-        color = p.get("color") or "unknown"
-        tally.setdefault(cls, {}).setdefault(color, 0)
-        tally[cls][color] += 1
 
     EMOJI = {
         "person": "🚶", "car": "🚗", "truck": "🚚", "bus": "🚌",
@@ -964,22 +946,16 @@ def _generate_ingest_summary(collection_name: str, client) -> str:
 
     _TOP_N = 20
     rows_html = ""
-    sorted_classes = sorted(tally, key=lambda c: -sum(tally[c].values()))
+    sorted_classes = sorted(counts, key=lambda c: -counts[c])
     for cls in sorted_classes[:_TOP_N]:
         emoji = EMOJI.get(cls, "📦")
-        total = sum(tally[cls].values())
-        color_parts = ", ".join(
-            f"{col}({cnt})"
-            for col, cnt in sorted(tally[cls].items(), key=lambda x: -x[1])
-            if col != "unknown"
-        )
-        color_str = f" \u2014 {color_parts}" if color_parts else ""
+        total = counts[cls]  # int from get_class_counts
         rows_html += (
             f'<div class="detected-item" style="'
             f'padding:4px 8px;border-radius:6px;margin:3px 0;'
             f'background:#1e293b;font-size:0.87rem;color:#e2e8f0;">'
             f'{emoji} <b>{cls}</b> <span style="color:#94a3b8;">'
-            f'\u00d7{total}{color_str}</span></div>\n'
+            f'\u00d7{total}</span></div>\n'
         )
 
     total_classes = len(sorted_classes)
@@ -1211,7 +1187,7 @@ def build_app() -> gr.Blocks:
                 return
 
             video_path = file_obj.name if hasattr(file_obj, "name") else str(file_obj)
-            ingestor = LiveIngestor(_QDRANT_CLIENT)
+            ingestor = LiveIngestor()
             iq: queue.Queue = queue.Queue()
             log_lines: list[str] = []
 
@@ -1238,10 +1214,12 @@ def build_app() -> gr.Blocks:
                 stats = upd.get("stats", {})
                 log_lines.append(f"[{phase}] {msg}")
                 if phase == "complete":
-                    new_collection = stats.get("collection", new_collection)
+                    new_collection = stats.get("video_id", stats.get("collection", new_collection))
                     _QUERY_CACHE.clear()
+                    global _ACTIVE_VIDEO_ID
+                    _ACTIVE_VIDEO_ID = new_collection
                     log_lines.append("__FOCUS_QUERY__")
-                    summary_html = _generate_ingest_summary(new_collection, _QDRANT_CLIENT)
+                    summary_html = _generate_ingest_summary(new_collection)
                 yield "\n".join(log_lines[-20:]), pct, stats, new_collection, video_path, summary_html, video_path
 
         upload_video.change(
