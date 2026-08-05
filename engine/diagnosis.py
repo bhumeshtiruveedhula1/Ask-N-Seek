@@ -11,10 +11,6 @@ Does not call parse_query or change search_structured signature.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from qdrant_client import QdrantClient
 
 from engine.search import search_structured, Result
 
@@ -45,8 +41,9 @@ def _fd(class_name, color=None, negated=None, spatial=None, count=None) -> dict:
 
 def run_diagnosis(
     filters: dict,
-    client: "QdrantClient",
-    collection_name: str,
+    # Legacy args from Qdrant era — ignored now, kept for call-site compat
+    _client: object = None,
+    _collection_name: str = "",
 ) -> dict:
     """
     Decompose filters into individual sub-queries and find the closest miss.
@@ -76,35 +73,35 @@ def run_diagnosis(
 
     # 1. Class only
     if cls:
-        r = search_structured(_fd(cls), client, collection_name)
+        r = search_structured(_fd(cls))
         counts["class_only"] = len(r)
         if r:
             candidates.append(("class only", r))
 
     # 2. Class + color
     if cls and color:
-        r = search_structured(_fd(cls, color=color), client, collection_name)
+        r = search_structured(_fd(cls, color=color))
         counts["class+color"] = len(r)
         if r:
             candidates.append(("class+color", r))
 
     # 3. Class + negated
     if cls and negated:
-        r = search_structured(_fd(cls, negated=negated), client, collection_name)
+        r = search_structured(_fd(cls, negated=negated))
         counts["class+negated"] = len(r)
         if r:
             candidates.append(("class+negated", r))
 
     # 4. Class + spatial
     if cls and spatial:
-        r = search_structured(_fd(cls, spatial=spatial), client, collection_name)
+        r = search_structured(_fd(cls, spatial=spatial))
         counts["class+spatial"] = len(r)
         if r:
             candidates.append(("class+spatial", r))
 
     # 5. Class + count
     if cls and count:
-        r = search_structured(_fd(cls, count=count), client, collection_name)
+        r = search_structured(_fd(cls, count=count))
         counts["class+count"] = len(r)
         if r:
             candidates.append(("class+count", r))

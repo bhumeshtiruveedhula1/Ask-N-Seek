@@ -67,7 +67,6 @@ try:
     import config as _config
     from config import load_threshold
     from engine.parser_gateway import parse_query
-    from engine.qdrant_gateway import get_qdrant_client, get_collection_name
     from engine.search import search_structured
     from engine.explanation import generate_explanation
     from engine.diagnosis import run_diagnosis
@@ -75,37 +74,26 @@ try:
     from engine.query_cache import QueryCache
     from engine.scenario_presets import get_scenarios
     from engine.result_scoring import ScoreBreakdown
+    from engine.storage import get_class_counts, get_videos, get_latest_video_id
     from backend.vision.vocabulary import VOCABULARY, VOCABULARY_SET, SYNONYM_MAP
     from backend.query.patterns import COLOR_VOCAB, COLOR_ALIASES
     from backend.query.query_parser import _preprocess_query as _parser_preprocess
 
-    _qdrant_client = get_qdrant_client()
     _query_cache = QueryCache()
     _backend_available = True
 
-    # ── Persist active collection across restarts (Fix 2) ──────────────
-    # After ingestion, _ACTIVE_COLL_FILE stores the real collection name.
-    # On restart, load it so queries don't fall back to stub_video_objects.
-    _ACTIVE_COLL_FILE = os.path.join(BACKEND_PATH, ".active_collection.json")
-    _persisted = None
-    if os.path.isfile(_ACTIVE_COLL_FILE):
-        try:
-            with open(_ACTIVE_COLL_FILE, "r") as _f:
-                _persisted = json.load(_f).get("collection")
-        except Exception:
-            pass
-    _collection = _persisted or get_collection_name()
+    # Active video_id: prefer the most recently ingested video from SQLite.
+    # Falls back to None if no video has been ingested yet.
+    _active_video_id: str | None = get_latest_video_id()
 
     logger.info("✅ Backend connected — path: %s", BACKEND_PATH)
-    logger.info("✅ Active collection: %s%s", _collection,
-                " (restored from file)" if _persisted else " (default)")
+    logger.info("✅ Active video: %s", _active_video_id or "(none — upload a video)")
 
 except Exception as _e:
     logger.warning("⚠️  Backend import failed: %s", _e)
     logger.warning("    Running in MOCK MODE")
     _MOCK_MODE = True
-    _qdrant_client = None
-    _collection = "mock_collection"
+    _active_video_id = None
     _query_cache = None  # type: ignore
 
 # ═══════════════════════════════════════════════════════════════════
@@ -203,33 +191,12 @@ _ingest_jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
 
-def _collect_top_classes(collection_name: str, top_n: int = 10) -> list[dict]:
-    """
-    TASK 2: Query Qdrant for class_name payload field to build top-class counts.
-    Called from _run_ingestion_job after 'complete'. Read-only — does NOT modify engine/.
-    """
-    if not _backend_available or not collection_name:
-        return []
+def _collect_top_classes(video_id: str, top_n: int = 10) -> list[dict]:
+    """Return top N class counts for a video from SQLite."""
     try:
-        counts: dict[str, int] = {}
-        offset = None
-        batch_size = 500
-        while True:
-            results, next_offset = _qdrant_client.scroll(
-                collection_name=collection_name,
-                limit=batch_size,
-                offset=offset,
-                with_payload=["class_name"],
-                with_vectors=False,
-            )
-            for pt in results:
-                cls = (pt.payload or {}).get("class_name", "unknown")
-                counts[cls] = counts.get(cls, 0) + 1
-            if next_offset is None or not results:
-                break
-            offset = next_offset
-        sorted_classes = sorted(counts.items(), key=lambda kv: -kv[1])
-        return [{"class": cls, "count": cnt} for cls, cnt in sorted_classes[:top_n]]
+        counts = get_class_counts(video_id)
+        sorted_cls = sorted(counts.items(), key=lambda kv: -kv[1])
+        return [{"class": cls, "count": cnt} for cls, cnt in sorted_cls[:top_n]]
     except Exception as exc:
         logger.warning("_collect_top_classes failed (non-fatal): %s", exc)
         return []
@@ -250,7 +217,7 @@ def _run_ingestion_job(job_id: str, video_path: str) -> None:
         return
 
     try:
-        ingestor = LiveIngestor(_qdrant_client)
+        ingestor = LiveIngestor()
         with _jobs_lock:
             _ingest_jobs[job_id]["phase"] = "starting"
             _ingest_jobs[job_id]["status"] = "running"
@@ -274,20 +241,15 @@ def _run_ingestion_job(job_id: str, video_path: str) -> None:
                 })
 
                 if phase == "complete":
-                    collection = stats.get("collection", ingestor.collection_name)
-                    _ingest_jobs[job_id]["collection_name"] = collection
+                    video_id = stats.get("video_id") or ingestor.video_id
+                    _ingest_jobs[job_id]["collection_name"] = video_id
                     _ingest_jobs[job_id]["status"] = "complete"
                     if _query_cache is not None:
                         _query_cache.clear()
-                    # ── Persist collection name so restarts remember it (Fix 2) ──
-                    global _collection
-                    _collection = collection
-                    try:
-                        with open(_ACTIVE_COLL_FILE, "w") as _cf:
-                            json.dump({"collection": collection}, _cf)
-                    except Exception as _pe:
-                        logger.warning("Could not persist collection name: %s", _pe)
-                    logger.info("Ingestion complete — collection: %s (persisted)", collection)
+                    # Update active video_id in memory
+                    global _active_video_id
+                    _active_video_id = video_id
+                    logger.info("Ingestion complete — video_id: %s", video_id)
 
                 elif phase == "error":
                     _ingest_jobs[job_id]["status"] = "error"
@@ -380,7 +342,7 @@ def health():
         "backend_mode": "mock" if _MOCK_MODE else "connected",
         "backend_path": BACKEND_PATH,
         "version": "2.4.0",
-        "collection": _collection,
+        "active_video": _active_video_id,
     }
 
 
@@ -395,7 +357,7 @@ def scenarios_endpoint():
     # Fallback presets matching engine/scenario_presets.py exactly
     return [
         {"id": "safety_violation", "label": "🔴 Safety Violation", "query": "person without helmet"},
-        {"id": "traffic_incident", "label": "�- Traffic Incident",  "query": "car left of person"},
+        {"id": "traffic_incident", "label": "🚗 Traffic Incident",  "query": "car left of person"},
         {"id": "lost_item",        "label": "🎒 Lost Item",         "query": "backpack without owner"},
         {"id": "access_control",   "label": "🚪 Access Control",    "query": "person without badge"},
         {"id": "crowd_check",      "label": "👥 Crowd Check",       "query": "more than two people"},
@@ -421,28 +383,10 @@ async def query_endpoint(req: QueryRequest):
     if not query:
         return {"status": "error", "message": "Empty query"}
 
-    target_coll = req.collection_name or _collection
+    # video_id: prefer explicit collection_name from request (set by frontend after ingestion),
+    # then fall back to the most-recently-ingested video in SQLite.
+    target_vid = req.collection_name or _active_video_id
     vocab_warnings = _check_vocab(query)
-
-    # ── Hard guard: reject queries when no real video has been ingested ──
-    # stub_video_objects is synthetic demo data — never search against it.
-    # This prevents the user from thinking NLP is broken when the real issue
-    # is that no video has been uploaded yet.
-    _STUB_COLLECTIONS = {"stub_video_objects", "mock_collection", None, ""}
-    if target_coll in _STUB_COLLECTIONS:
-        return {
-            "status":     "no_data",
-            "results":    [],
-            "parsed":     {},
-            "diagnosis":  {
-                "html":    "<p>📹 No video has been ingested yet. Upload a video above to start searching.</p>",
-                "hint":    "Drag and drop your video into the upload zone above.",
-            },
-            "cached":     False,
-            "vocab_warnings": vocab_warnings,
-        }
-
-
 
     # ── Mock mode fallback ──────────────────────────────────────────
     if _MOCK_MODE:
@@ -474,10 +418,9 @@ async def query_endpoint(req: QueryRequest):
     # ── Real backend path ───────────────────────────────────────────
 
     # Check QueryCache first
-    cached = _query_cache.get(query, target_coll)
+    cached = _query_cache.get(query, target_vid or "")
     if cached is not None:
-        # cached is the full response dict
-        logger.info("Cache HIT for query='%s' collection='%s'", query, target_coll)
+        logger.info("Cache HIT for query='%s' video='%s'", query, target_vid)
         cached_response = dict(cached)
         cached_response["cached"] = True
         return cached_response
@@ -500,9 +443,16 @@ async def query_endpoint(req: QueryRequest):
             "vocab_warnings": vocab_warnings,
         }
 
+    # Inject video_id into filters so search_structured scopes to this video
+    filters_with_vid = dict(parsed.get("filters", {}))
+    if target_vid:
+        filters_with_vid["video_id"] = target_vid
+    parsed_with_vid = dict(parsed)
+    parsed_with_vid["filters"] = filters_with_vid
+
     # Search
     try:
-        results = search_structured(parsed, _qdrant_client, target_coll)
+        results = search_structured(parsed_with_vid)
     except Exception as exc:
         logger.error("search_structured failed: %s", exc)
         return {"status": "error", "message": str(exc), "vocab_warnings": vocab_warnings}
@@ -524,11 +474,11 @@ async def query_endpoint(req: QueryRequest):
             "score_breakdown":  sb,
         })
 
-    # Diagnosis if no match
+    # Diagnosis if no results or score below threshold
     diagnosis = None
     if not results or best_score < threshold:
         try:
-            diag = run_diagnosis(parsed.get("filters", {}), _qdrant_client, target_coll)
+            diag = run_diagnosis(parsed.get("filters", {}))
             diagnosis = {
                 "html": diag.get("html", "") if isinstance(diag, dict) else str(diag),
                 "best_score": best_score,
@@ -547,14 +497,13 @@ async def query_endpoint(req: QueryRequest):
         "threshold":      threshold,
         "best_score":     best_score,
         "vocab_warnings": vocab_warnings,
-        "collection":     target_coll,
+        "collection":     target_vid,
         "cached":         False,
     }
 
-    # Cache ONLY successful matches — never cache empty/error/no_match responses (Fix 3)
-    # Caching no_match causes stale "no results" to persist until server restart.
+    # Cache ONLY successful matches
     if status == "match" and enriched:
-        _query_cache.set(query, target_coll, response)
+        _query_cache.set(query, target_vid or "", response)
 
     return response
 
@@ -752,12 +701,17 @@ async def serve_video(filename: str):
 
 @app.get("/collections")
 def list_collections():
-    """List all Qdrant collections (for debugging)."""
+    """List all ingested videos (previously 'collections' in Qdrant era)."""
     if not _backend_available:
-        return {"collections": [], "mode": "mock"}
+        return {"collections": [], "videos": [], "mode": "mock"}
     try:
-        cols = [c.name for c in _qdrant_client.get_collections().collections]
-        return {"collections": cols, "default": _collection}
+        videos = get_videos()
+        return {
+            "videos":       videos,
+            "active_video": _active_video_id,
+            # Legacy key for any frontend code that reads "collections"
+            "collections":  videos,
+        }
     except Exception as exc:
         return {"error": str(exc)}
 

@@ -1,14 +1,13 @@
 """
 engine/live_ingestor.py — Live Judge-Video Ingestion Mode (U1)
 
-Wraps the existing Achilles pipeline (extract → detect → color → spatial → Qdrant)
+Wraps the existing Achilles pipeline (extract → detect → color → spatial → SQLite)
 in a background thread, streaming progress dicts via a generator.
 
 CALLS existing functions — does NOT reimplement:
   - backend.ingestion.extraction_engine.extract_frames()
   - backend.vision.object_detector.get_detector()
   - backend.vision.color_extractor.extract_color()
-  - engine.qdrant_gateway.make_judge_collection_name()
 
 NOTE: extract_color() takes frame_bgr (np.ndarray), NOT frame_path.
       We cv2.imread the saved keyframe before calling it.
@@ -31,20 +30,14 @@ import time
 
 import config as _config
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
-
 from backend.ingestion.extraction_engine import extract_frames
 from backend.vision.color_extractor import extract_color
 from backend.vision.object_detector import get_detector, ObjectDetector
 from backend.vision.vocabulary import SYNONYM_MAP
-from engine.qdrant_gateway import make_judge_collection_name
+from engine.storage import insert_detections
 
 logger = logging.getLogger(__name__)
 
-_DUMMY_VECTOR: list[float] = [0.0]
-_PAYLOAD_INDEX_FIELDS = ("class_name", "color", "spatial_relations")
-_BATCH_SIZE = 100          # Qdrant upsert batch size
 
 
 # ---------------------------------------------------------------------------
@@ -213,26 +206,28 @@ class LiveIngestor:
 
     Usage::
 
-        client   = get_qdrant_client()
-        ingestor = LiveIngestor(client)
+        ingestor = LiveIngestor()
         for update in ingestor.ingest(video_path):
             print(update)   # dict with phase, progress_pct, message, stats
-        # Final update has phase="complete" and stats["collection"]
+        # Final update has phase="complete" and stats["video_id"]
     """
 
     def __init__(
         self,
-        qdrant_client: QdrantClient,
-        collection_name: str | None = None,
         detector: ObjectDetector | None = None,
     ) -> None:
-        self._client     = qdrant_client
-        self._collection = collection_name or make_judge_collection_name()
-        self._detector   = detector or get_detector()
+        # video_id is set once ingest() is called (derived from the video filename)
+        self._video_id: str = ""
+        self._detector = detector or get_detector()
 
     @property
+    def video_id(self) -> str:
+        return self._video_id
+
+    # Backward-compat alias: bridge_server reads ingestor.collection_name
+    @property
     def collection_name(self) -> str:
-        return self._collection
+        return self._video_id
 
     # ------------------------------------------------------------------
     # Public generator
@@ -255,6 +250,9 @@ class LiveIngestor:
           complete        100 %
         """
         q: queue.Queue = queue.Queue()
+
+        # Derive stable video_id from the video filename (strip extension)
+        self._video_id = Path(video_path).stem
 
         def _worker():
             try:
@@ -290,7 +288,7 @@ class LiveIngestor:
         output_dir: str,
     ) -> Generator[dict, None, None]:
 
-        stats = {"scenes": 0, "keyframes": 0, "objects": 0, "collection": self._collection}
+        stats = {"scenes": 0, "keyframes": 0, "objects": 0, "video_id": self._video_id}
 
         # ── Phase 1: Scene detection (0 → 10%) ──────────────────────────
         yield _progress("scene_detection", 0, "Starting scene detection…", stats)
@@ -359,10 +357,10 @@ class LiveIngestor:
                 )
 
             stats = {
-                "scenes":     scene_id + 1,
-                "keyframes":  frame_count,
-                "objects":    obj_count,
-                "collection": self._collection,
+                "scenes":    scene_id + 1,
+                "keyframes": frame_count,
+                "objects":   obj_count,
+                "video_id":  self._video_id,
             }
 
             if frame_count % 5 == 0:
@@ -444,44 +442,42 @@ class LiveIngestor:
         # ── Phase 5: Spatial (already inside detections — just log) ─────
         yield _progress("spatial", 75, "Spatial relations already computed by detector.", stats)
 
-        # ── Phase 6: Qdrant indexing (80 → 100%) ────────────────────────
-        yield _progress("indexing", 80, f"Creating collection {self._collection}…", stats)
+        # ── Phase 6: SQLite indexing (80 → 100%) ────────────────────
+        yield _progress("indexing", 80, f"Writing {obj_count} detections to SQLite…", stats)
 
-        self._create_collection()
-
-        points: list[PointStruct] = []
+        detection_records: list[dict] = []
         for record in frame_records:
-            fp    = record["frame_path"]
-            dets  = detections_map.get(fp, [])
-            cols  = color_map.get(fp, [])
+            fp   = record["frame_path"]
+            dets = detections_map.get(fp, [])
+            cols = color_map.get(fp, [])
 
             for i, det in enumerate(dets):
                 color = cols[i] if i < len(cols) else "unknown"
                 pt_id = str(uuid.uuid5(
                     uuid.NAMESPACE_URL,
-                    f"{record['video_id']}_{record['frame_index']}_{i}",
+                    f"{self._video_id}_{record['frame_index']}_{i}",
                 ))
-                payload = {
-                    "video_id":          record["video_id"],
-                    "frame_index":       record["frame_index"],
-                    "timestamp":         record["timestamp"],
-                    "scene_id":          record["scene_id"],
-                    "frame_path":        fp,
-                    "class_name":        det["class"],
-                    "color":             color,
-                    "confidence":        det["confidence"],
-                    "bbox":              list(det["bbox"]),
-                    "spatial_relations": det.get("spatial_relations", []),
-                    "detection_source":  det.get("detection_source", "full_primary"),
-                }
-                points.append(PointStruct(id=pt_id, vector=_DUMMY_VECTOR, payload=payload))
+                detection_records.append({
+                    "id":               pt_id,
+                    "video_id":         self._video_id,
+                    "timestamp":        record["timestamp"],
+                    "scene_id":         record["scene_id"],
+                    "frame_index":      record["frame_index"],
+                    "class_name":       det["class"],
+                    "color":            color,
+                    "confidence":       det["confidence"],
+                    "bbox":             list(det["bbox"]),
+                    "spatial_relations":det.get("spatial_relations", []),
+                })
 
-        # Batch upsert
-        total_pts = len(points)
-        for batch_start in range(0, total_pts, _BATCH_SIZE):
-            batch = points[batch_start: batch_start + _BATCH_SIZE]
-            self._client.upsert(self._collection, batch)
-            pct = _clamp(80 + int((batch_start + len(batch)) / max(total_pts, 1) * 20), 80, 99)
+        total_pts = len(detection_records)
+        # Insert in batches so progress bar moves
+        _BATCH = 200
+        for batch_start in range(0, max(total_pts, 1), _BATCH):
+            batch = detection_records[batch_start: batch_start + _BATCH]
+            if batch:
+                insert_detections(self._video_id, batch)
+            pct = _clamp(80 + int((batch_start + len(batch)) / max(total_pts, 1) * 19), 80, 99)
             yield _progress(
                 "indexing", pct,
                 f"Indexed {batch_start + len(batch)}/{total_pts} points…", stats,
@@ -537,35 +533,15 @@ class LiveIngestor:
                          filtered_count, filtered_names)
         top_classes = top_classes[:10]
 
-        stats["collection"]      = self._collection
-        stats["top_classes"]     = top_classes
+        stats["video_id"]      = self._video_id
+        stats["collection"]    = self._video_id   # backward-compat for bridge_server
+        stats["top_classes"]   = top_classes
         stats["total_keyframes"] = frame_count
         yield _progress(
             "complete", 100,
-            f"Ready to search — {stats['keyframes']} frames, {total_pts} points in {self._collection}",
+            f"Ready to search — {stats['keyframes']} frames, {total_pts} detections stored",
             stats,
         )
-
-    # ------------------------------------------------------------------
-    # Qdrant helpers
-    # ------------------------------------------------------------------
-
-    def _create_collection(self) -> None:
-        existing = {c.name for c in self._client.get_collections().collections}
-        if self._collection in existing:
-            logger.info("Collection %r already exists — skipping create.", self._collection)
-            return
-        self._client.create_collection(
-            collection_name=self._collection,
-            vectors_config=VectorParams(size=1, distance=Distance.COSINE),
-        )
-        for field in _PAYLOAD_INDEX_FIELDS:
-            self._client.create_payload_index(
-                collection_name=self._collection,
-                field_name=field,
-                field_schema="keyword",
-            )
-        logger.info("Created collection %r with payload indexes.", self._collection)
 
 
 # ---------------------------------------------------------------------------

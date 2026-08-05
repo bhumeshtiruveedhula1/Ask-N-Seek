@@ -1,16 +1,10 @@
 """
-engine/qdrant_gateway.py — Qdrant client factory for Odysseus Part 3.
+engine/qdrant_gateway.py — DEPRECATED (replaced by engine/storage.py SQLite backend)
 
-Controls whether the stub in-memory client or a real Qdrant connection is used.
-To swap in the real collection, set USE_STUB_QDRANT = false in .env (or config.py):
+This file is kept to avoid import errors from calibration.py and any other
+legacy callers. All functions return safe stubs or raise informative errors.
 
-    # TODO: SWAP FOR ACHILLES — set USE_STUB_QDRANT = False in .env
-    USE_STUB_QDRANT = false
-    QDRANT_HOST     = <real host>
-    QDRANT_PORT     = 6333
-    QDRANT_COLLECTION = video_objects
-
-No other file needs to change.
+Storage is now handled by engine/storage.py (SQLite, zero-config, persistent).
 """
 
 from __future__ import annotations
