@@ -46,6 +46,73 @@ _PAYLOAD_INDEX_FIELDS = ("class_name", "color", "spatial_relations")
 _BATCH_SIZE = 100          # Qdrant upsert batch size
 
 
+# ---------------------------------------------------------------------------
+# Secondary NMS deduplication (Fix 1)
+# ---------------------------------------------------------------------------
+# YOLO-World's internal NMS at IoU=0.45 lets marginally overlapping zero-shot
+# boxes through. A single bottle can produce 3-5 detections with IoU 0.50-0.60,
+# inflating max_concurrent. This secondary pass at 0.65 merges same-object
+# duplicates while preserving distinct nearby objects.
+
+def _calculate_iou(box_a: tuple, box_b: tuple) -> float:
+    """Intersection over Union for two (x1,y1,x2,y2) boxes."""
+    x1 = max(box_a[0], box_b[0])
+    y1 = max(box_a[1], box_b[1])
+    x2 = min(box_a[2], box_b[2])
+    y2 = min(box_a[3], box_b[3])
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    area_a = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
+    area_b = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _deduplicate_detections(
+    detections: list[dict],
+    iou_thresh: float = 0.65,
+) -> list[dict]:
+    """
+    Class-specific secondary NMS: keep highest-confidence box per overlapping group.
+
+    Groups detections by class, then for each class applies greedy NMS at the
+    given IoU threshold. The survivor is always the highest-confidence detection.
+    Field names match live_ingestor detection contract: 'class', 'bbox', 'confidence'.
+    """
+    if not detections:
+        return detections
+
+    by_class: dict[str, list[dict]] = {}
+    for d in detections:
+        cls = d.get("class") or d.get("class_name", "unknown")
+        by_class.setdefault(cls, []).append(d)
+
+    deduped: list[dict] = []
+    for cls_dets in by_class.values():
+        # Sort by confidence descending — greedy keeps best first
+        cls_dets.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+        keep: list[dict] = []
+        for det in cls_dets:
+            bbox = det.get("bbox") or det.get("box")
+            if not bbox or len(bbox) != 4:
+                keep.append(det)  # malformed bbox — keep unconditionally
+                continue
+            overlap = any(
+                len(k.get("bbox") or k.get("box", [])) == 4
+                and _calculate_iou(bbox, k.get("bbox") or k.get("box"))
+                > iou_thresh
+                for k in keep
+            )
+            if not overlap:
+                keep.append(det)
+        deduped.extend(keep)
+
+    n_before, n_after = len(detections), len(deduped)
+    if n_after < n_before:
+        logger.debug("[dedup] %d → %d detections (dropped %d duplicates)",
+                     n_before, n_after, n_before - n_after)
+    return deduped
+
+
 class LiveIngestor:
     """
     Full ingestion pipeline for a single video, streaming progress updates.
@@ -163,6 +230,9 @@ class LiveIngestor:
 
             # Object detection
             dets = self._detector.detect_keyframe(frame_path)
+            # Fix 1: Secondary NMS — collapse same-object YOLO duplicates
+            # before count tracking, color extraction, and Qdrant storage.
+            dets = _deduplicate_detections(dets, iou_thresh=0.65)
             detections_map[frame_path] = dets
             obj_count += len(dets)
 

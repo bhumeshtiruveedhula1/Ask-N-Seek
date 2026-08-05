@@ -215,11 +215,25 @@ def search_structured(
     # Step 4: Apply negation filter (frame-level — checks ALL objects)
     # -----------------------------------------------------------------------
     if negated:
+        # Fix 3B: Asymmetric confidence architecture.
+        # Ingestion gate: detections >= 0.30 enter the database (preserves recall).
+        # Negation exclusion gate: only detections >= 0.40 count as "present".
+        # This creates a semantic buffer: a blurry background reflection of a
+        # helmet at 0.32 is stored but IGNORED for negation, preventing it from
+        # wrongly excluding frames with 10 valid people. Only a clearly-visible
+        # helmet (confidence >= 0.40) legitimately blocks the frame.
+        NEGATION_EXCLUSION_THRESH = 0.40  # intentionally > ingestion gate (0.30)
+
         filtered = {}
         for key, objs in candidates_by_frame.items():
             all_in_frame = all_by_frame.get(key, [])
-            frame_classes = {o.get(_QC) for o in all_in_frame}
-            if not frame_classes.intersection(negated):
+            # Only count the negated class as "present" if confidence is high enough
+            has_confident_negated = any(
+                o.get(_QC) in negated
+                and o.get("confidence", 1.0) >= NEGATION_EXCLUSION_THRESH
+                for o in all_in_frame
+            )
+            if not has_confident_negated:
                 filtered[key] = objs
         candidates_by_frame = filtered
 

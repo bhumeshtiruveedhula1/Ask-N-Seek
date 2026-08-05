@@ -165,13 +165,27 @@ function renderQuickChips(topClasses) {
     // Use max_concurrent for honest count; fallback to count for backward compat
     const maxConcurrent = item.max_concurrent != null ? item.max_concurrent : (item.count || 0);
     const framesDetected = item.frames_detected != null ? item.frames_detected : (item.count || 0);
-    const tooltip = `Detected in ${framesDetected} frame${framesDetected !== 1 ? 's' : ''}, max ${maxConcurrent} concurrent`;
+    // Fix 4: Asymmetric tooltip — clarifies max-concurrent vs total-frame semantics.
+    // '· 1' confused judges into thinking only 1 instance total was detected.
+    const tooltip = maxConcurrent === 1
+      ? `Seen in ${framesDetected} frame${framesDetected !== 1 ? 's' : ''}, 1 at a time`
+      : `Up to ${maxConcurrent} visible at once · across ${framesDetected} frame${framesDetected !== 1 ? 's' : ''}`;
     return `<button class="quick-chip" onclick="performSearch(${JSON.stringify(cls)})" title="${tooltip}">
       ${cls}<span class="quick-chip-count">· ${maxConcurrent}</span>
     </button>`;
   }).join('');
 
   chips.style.display = 'flex';
+
+  // Inject subtitle once so judges understand the count metric
+  const existingHint = document.getElementById('chip-count-hint');
+  if (!existingHint) {
+    const hint = document.createElement('div');
+    hint.id = 'chip-count-hint';
+    hint.style.cssText = 'font-size:0.72rem;color:var(--text-muted,#8899aa);margin-top:4px;letter-spacing:0.02em;';
+    hint.textContent = 'Numbers show max objects visible at once in any frame';
+    chips.insertAdjacentElement('afterend', hint);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════

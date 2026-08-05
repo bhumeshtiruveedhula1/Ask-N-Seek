@@ -127,9 +127,29 @@ _WITH_NO_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Fix 3A: bare "no" negation → "without" (e.g. "person no helmet")
+# Pattern: noun/adjective SPACE "no" SPACE → noun SPACE "without" SPACE
+# Anchored to word boundaries; excludes "no " at the start of a sentence
+# ("no helmet" alone is parsed fine by spaCy; we only need to handle
+# mid-phrase "X no Y" → "X without Y").
+_BARE_NO_RE = re.compile(
+    r"(?<=\w)\s+no\s+",
+    re.IGNORECASE,
+)
+
+# Fix 3A: "lacking" → "without"
+_LACKING_RE = re.compile(
+    r"\blacking\s+",
+    re.IGNORECASE,
+)
+
 def _preprocess_query(query: str) -> str:
     """
     Normalise common user phrasings before spaCy parsing.
+
+    Task 0 (Fix 3A): bare "no" and "lacking" negation:
+            "person no helmet"     → "person without helmet"
+            "person lacking helmet" → "person without helmet"
 
     Task 1: "with no"/"having no"/"wearing no" → "without "
             (belt-and-suspenders: spaCy negation already handles many,
@@ -140,8 +160,12 @@ def _preprocess_query(query: str) -> str:
             "bluecar"  → "blue car"
             Only splits if remainder after color is a VOCABULARY_SET member.
     """
-    # Task 1
-    q = _WITH_NO_RE.sub("without ", query)
+    # Task 0 (Fix 3A): normalize non-standard negation phrasings BEFORE spaCy.
+    # Order matters: _WITH_NO_RE must run first to consume "with no"/"having no"
+    # before _BARE_NO_RE sees the bare "no" residual.
+    q = _WITH_NO_RE.sub("without ", query)    # "with no X" → "without X" (Task 1 kept here)
+    q = _BARE_NO_RE.sub(" without ", q)       # "X no Y"    → "X without Y"
+    q = _LACKING_RE.sub("without ", q)        # "lacking X" → "without X"
 
     # Task 2: split runtogethercolor+noun compounds, word by word
     tokens = q.split()

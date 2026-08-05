@@ -325,6 +325,15 @@ SYNONYM_MAP: dict[str, str] = {
     "fridge":        "refrigerator",
     "mike":          "microphone",
     "mic":           "microphone",
+    # CLIP latent-space duplicate merges (Fix 2B)
+    # These pairs trigger dual detections on the same physical object
+    # because YOLO-World's zero-shot embedding conflates them.
+    "headset":       "headphones",
+    "smartwatch":    "watch",
+    "sneaker":       "shoe",
+    "sneakers":      "shoe",
+    "kettlebell":    "dumbbell",
+
 
     # Hinglish / code-mixed
     "gaadi":         "car",
