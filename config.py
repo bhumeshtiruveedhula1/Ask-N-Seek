@@ -160,6 +160,13 @@ MIN_FRAME_PRESENCE: int = 2
 # Increase for wider proximity detection; decrease to require closer objects.
 SPATIAL_NEAR_GAP_PX: int = 50
 
+# Resolution-independent near threshold: fraction of frame diagonal.
+# 0.25 = 25% of diagonal (~367px for 1280x720, ~551px for 1920x1080).
+# Person standing 1-2 car lengths from a car → typically within 30% of diagonal.
+# 0.15 (old default) was too tight — missed valid "near" frames.
+SPATIAL_NEAR_RATIO: float = 0.25
+
+
 # ---------------------------------------------------------------------------
 # Per-class confidence gates (overrides EARLY_CONFIDENCE_FILTER for specific classes)
 # ---------------------------------------------------------------------------
