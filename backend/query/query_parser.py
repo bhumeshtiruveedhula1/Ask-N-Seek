@@ -108,7 +108,7 @@ from .patterns import (
 
 )
 
-from backend.vision.vocabulary import VOCABULARY_SET, resolve_synonym
+from backend.vision.vocabulary import VOCABULARY_SET, resolve_synonym, SYNONYM_MAP
 
 # ---------------------------------------------------------------------------
 # PROMPT 5: Query pre-processing (Tasks 1 & 2)
@@ -151,6 +151,73 @@ _WEARING_RE = re.compile(
     r"(?<!not )(?<!isn't )(?<!is not )(?<!doesn't )\bwearing\b",
     re.IGNORECASE,
 )
+
+# ---------------------------------------------------------------------------
+# Typo auto-correction
+# ---------------------------------------------------------------------------
+import difflib
+from difflib import SequenceMatcher
+
+# All tokens the parser can act on: vocabulary, synonyms, spatial verbs,
+# negation words, color names. Built once at import time for O(1) lookups.
+_SPATIAL_ACTION_WORDS: frozenset[str] = frozenset({
+    # Spatial trigger verbs (Phase 6) — maps to "touching" or "near" at parse time
+    "touching", "grabbing", "holding", "pulling", "opening",
+    "near", "beside", "close", "next",
+    "left", "right", "of", "to", "the", "on",
+})
+_NEGATION_WORDS: frozenset[str] = frozenset({
+    "without", "not", "lacking", "missing", "wearing", "bina",
+    # Counting / structural query words — must NOT be fuzzy-corrected to colors/vocab
+    "more", "than", "less", "fewer", "least", "most", "exactly",
+    "several", "couple", "pair", "many", "some", "any",
+    "and", "or", "with", "that", "this", "have", "has",
+    "from", "into", "onto", "over", "under", "about",
+})
+# Full known set: union of all recognized query tokens
+_QUERY_KNOWN_TOKENS: frozenset[str] = (
+    VOCABULARY_SET
+    | frozenset(SYNONYM_MAP.keys())
+    | _SPATIAL_ACTION_WORDS
+    | _NEGATION_WORDS
+    | COLOR_VOCAB
+)
+
+
+def _correct_typos(text: str) -> str:
+    """
+    Auto-correct OOV tokens using close matches from _QUERY_KNOWN_TOKENS.
+
+    Algorithm (PRD v2.4.1 §FR3):
+      1. Split into tokens.
+      2. Strip punctuation from each token for lookup.
+      3. Skip: already in known set, or len < 4 (too short to fuzzy safely).
+      4. difflib.get_close_matches(token, known, n=1, cutoff=0.70)
+      5. If match found AND SequenceMatcher ratio >= 0.70: replace token.
+
+    Called AFTER all other normalizations so "wearing no"→"without" and
+    compound splitting have already run. Only OOV residuals reach this step.
+    """
+    words = text.split()
+    corrected = []
+    for word in words:
+        clean = word.strip(".,!?;:\"'()[]{}").lower()
+        # Skip: empty, too short to fuzzy safely, or already recognized
+        if not clean or len(clean) < 4 or clean in _QUERY_KNOWN_TOKENS:
+            corrected.append(word)
+            continue
+        matches = difflib.get_close_matches(clean, _QUERY_KNOWN_TOKENS, n=1, cutoff=0.70)
+        if matches:
+            ratio = SequenceMatcher(None, clean, matches[0]).ratio()
+            if ratio >= 0.70:
+                logger.debug(
+                    "Typo correction: %r -> %r (ratio=%.2f)", word, matches[0], ratio
+                )
+                corrected.append(matches[0])
+                continue
+        corrected.append(word)
+    return " ".join(corrected)
+
 
 def _preprocess_query(query: str) -> str:
     """
@@ -200,7 +267,14 @@ def _preprocess_query(query: str) -> str:
                     break
         if not split_done:
             new_tokens.append(tok)
-    return " ".join(new_tokens)
+    q = " ".join(new_tokens)
+
+    # Typo correction: fix OOV tokens (e.g. "grabing" → "grabbing",
+    # "helmmet" → "helmet") using fuzzy match against all known query tokens.
+    # Runs last so compound-split and normalization results feed into it cleanly.
+    q = _correct_typos(q)
+
+    return q
 
 
 
