@@ -94,6 +94,40 @@ def _sanitize_spatial_subject(parse_result) -> None:
             )
 
 
+def _sanitize_person_color(parse_result) -> None:
+    """
+    Strip color from 'person' when another object in the same query claims the
+    same color. The color scanner sometimes binds to 'person' (leftmost noun)
+    even when the color belongs to a vehicle or object further right.
+    Only strips when another object shares the SAME color — leaves it alone if
+    person is the sole colored object (e.g. 'person in red' is still valid).
+    Mutates parse_result.objects in place.
+    """
+    objs = getattr(parse_result, "objects", None)
+    if not objs or len(objs) < 2:
+        return
+    # Find person
+    person_idx = None
+    for i, obj in enumerate(objs):
+        if obj.get("class_name") == "person":
+            person_idx = i
+            break
+    if person_idx is None:
+        return
+    person_color = objs[person_idx].get("color")
+    if not person_color:
+        return
+    # Strip only if another object shares the same color
+    for i, obj in enumerate(objs):
+        if i != person_idx and obj.get("color") == person_color:
+            objs[person_idx]["color"] = None
+            logger.debug(
+                "parser_gateway: stripped color '%s' from person (shared with %s)",
+                person_color, obj.get("class_name"),
+            )
+            return
+
+
 def _normalise_parse_result(result) -> dict:
     """
     Convert Achilles's ParseResult dataclass → stub-flat dict shape.
@@ -136,6 +170,16 @@ def _normalise_parse_result(result) -> dict:
     positive = [o for o in objects if not o.get("negated")]
     primary  = positive[0] if positive else (objects[0] if objects else {})
 
+    # Sanitize BEFORE reading color from primary — these mutate result.objects in place.
+    # _sanitize_person_color strips color from person when another object claims it.
+    # _sanitize_spatial_subject redirects clothing spatial subjects to person.
+    _sanitize_spatial_subject(result)
+    _sanitize_person_color(result)
+
+    # Re-resolve primary after mutations (objects list may have been updated)
+    positive = [o for o in objects if not o.get("negated")]
+    primary  = positive[0] if positive else (objects[0] if objects else {})
+
     class_filter = primary.get("class_name")  or None
     color_filter = primary.get("color")        or None
 
@@ -146,10 +190,9 @@ def _normalise_parse_result(result) -> dict:
     ]
 
     # Spatial relation: first spatial spec if present
-    # Sanitize subject misbinding (clothing → person) before extracting
-    _sanitize_spatial_subject(result)
     spatial_relation = None
     if spatial:
+
         sp = spatial[0]
         spatial_relation = {
             "type":         sp.get("relation"),

@@ -145,9 +145,28 @@ def search_structured(
             FieldCondition(key=_QC, match=MatchValue(value=qdrant_class))
         )
     if color_filter:
+        # Color family matching — the extractor stores shade variants
+        # ("dark blue", "light blue", "navy") but the user queries "blue".
+        # MatchAny fans out the query to all shades in the same family.
+        _COLOR_FAMILIES: dict[str, list[str]] = {
+            "blue":   ["blue", "dark blue", "light blue", "navy"],
+            "red":    ["red", "dark red", "orange-red"],
+            "green":  ["green", "light green", "dark green", "olive"],
+            "yellow": ["yellow", "dark yellow", "gold"],
+            "purple": ["purple", "pink", "hot pink"],
+            "gray":   ["gray", "light gray", "dark gray", "charcoal"],
+            "black":  ["black"],
+            "white":  ["white"],
+            "orange": ["orange", "orange-red"],
+            "brown":  ["brown", "beige", "tan"],
+            "silver": ["silver"],
+            "gold":   ["gold"],
+        }
+        family = _COLOR_FAMILIES.get(color_filter, [color_filter])
         must_conditions.append(
-            FieldCondition(key=_QO, match=MatchValue(value=color_filter))
+            FieldCondition(key=_QO, match=MatchAny(any=family))
         )
+
 
     qdrant_filter = Filter(must=must_conditions) if must_conditions else None
 
