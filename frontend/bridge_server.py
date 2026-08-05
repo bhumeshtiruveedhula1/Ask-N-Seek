@@ -424,6 +424,26 @@ async def query_endpoint(req: QueryRequest):
     target_coll = req.collection_name or _collection
     vocab_warnings = _check_vocab(query)
 
+    # ── Hard guard: reject queries when no real video has been ingested ──
+    # stub_video_objects is synthetic demo data — never search against it.
+    # This prevents the user from thinking NLP is broken when the real issue
+    # is that no video has been uploaded yet.
+    _STUB_COLLECTIONS = {"stub_video_objects", "mock_collection", None, ""}
+    if target_coll in _STUB_COLLECTIONS:
+        return {
+            "status":     "no_data",
+            "results":    [],
+            "parsed":     {},
+            "diagnosis":  {
+                "html":    "<p>📹 No video has been ingested yet. Upload a video above to start searching.</p>",
+                "hint":    "Drag and drop your video into the upload zone above.",
+            },
+            "cached":     False,
+            "vocab_warnings": vocab_warnings,
+        }
+
+
+
     # ── Mock mode fallback ──────────────────────────────────────────
     if _MOCK_MODE:
         is_nonsense = any(w in query.lower() for w in ["purple elephant", "flying dinosaur"])

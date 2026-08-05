@@ -648,8 +648,26 @@ function renderResults(data) {
   const jumpSection = document.getElementById('jumpListSection');
 
   header.style.display = 'block';
-  countEl.textContent = results.length + ' Result' + (results.length !== 1 ? 's' : '');
+  // Show meaningful counter label
+  countEl.textContent = data.status === 'no_data'
+    ? 'Upload a video first'
+    : (results.length + ' Result' + (results.length !== 1 ? 's' : ''));
   queryEl.textContent = 'for "' + state.currentQuery + '"';
+
+  // ── No video uploaded yet (stub guard fired) ─────────────────────────
+  if (data.status === 'no_data') {
+    grid.innerHTML = [
+      '<div style="text-align:center;padding:60px 20px;color:var(--color-text-muted);">',
+      '  <div style="font-size:56px;margin-bottom:16px;">📹</div>',
+      '  <h3 style="color:var(--color-text-primary);margin-bottom:10px;font-size:1.3rem;">No Video Uploaded Yet</h3>',
+      '  <p style="max-width:360px;margin:0 auto;">Upload a video using the drop zone above to start searching. Results will appear here after ingestion completes.</p>',
+      '</div>'
+    ].join('');
+    diagPanel.style.display = 'none';
+    videoArea.style.display = 'none';
+    if (jumpSection) jumpSection.style.display = 'none';
+    return;
+  }
 
   if (results.length === 0) {
     grid.innerHTML = '';

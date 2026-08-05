@@ -161,10 +161,10 @@ MIN_FRAME_PRESENCE: int = 2
 SPATIAL_NEAR_GAP_PX: int = 50
 
 # Resolution-independent near threshold: fraction of frame diagonal.
-# 0.25 = 25% of diagonal (~367px for 1280x720, ~551px for 1920x1080).
-# Person standing 1-2 car lengths from a car → typically within 30% of diagonal.
-# 0.15 (old default) was too tight — missed valid "near" frames.
-SPATIAL_NEAR_RATIO: float = 0.25
+# 0.15 = 15% of diagonal (~220px for 1280x720, ~330px for 1920x1080).
+# Person within ~1 car-length of the car → qualifies as "near".
+# 0.25 was too loose — caught background people far from the target car.
+SPATIAL_NEAR_RATIO: float = 0.15
 
 
 # ---------------------------------------------------------------------------

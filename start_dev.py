@@ -1,95 +1,129 @@
 #!/usr/bin/env python3
 """
-Ask-N-Seek Development Launcher v2.4
-Starts both services for local development:
-  1. FastAPI Bridge  (port 8000) — fresh_clone/frontend/bridge_server.py
-  2. Static HTML Server (port 3000) — serves fresh_clone/frontend/
+Ask-N-Seek Development Launcher v2.5
+Runs bridge + static server in THIS terminal (no new windows).
+Logs go to bridge.log and static.log in the project root.
 
 Usage:
-  python start_dev.py
+    python start_dev.py
+
+Stop with Ctrl+C.
 """
 import subprocess
 import sys
 import os
 import time
-import platform
 
-REPO_ROOT     = os.path.dirname(os.path.abspath(__file__))
-FRONTEND_DIR  = os.path.join(REPO_ROOT, "frontend")
-
-
-def run_in_terminal(title: str, cwd: str, cmd: str) -> None:
-    """Open a new terminal window and run cmd in it (keeps the window open)."""
-    system = platform.system()
-    if system == "Windows":
-        full = f'start "{title}" cmd /k "cd /d {cwd} && {cmd}"'
-        subprocess.Popen(full, shell=True)
-    elif system == "Darwin":
-        script = f'tell app "Terminal" to do script "cd {cwd} && {cmd}"'
-        subprocess.Popen(["osascript", "-e", script])
-    else:  # Linux
-        try:
-            subprocess.Popen(
-                ["gnome-terminal", "--title", title, "--", "bash", "-c",
-                 f"cd {cwd} && {cmd}; exec bash"]
-            )
-        except FileNotFoundError:
-            subprocess.Popen(
-                ["xterm", "-T", title, "-e",
-                 f"bash -c 'cd {cwd} && {cmd}; bash'"]
-            )
-
-
-def check_prereqs() -> bool:
-    """Warn about missing tools but don't abort."""
-    ok = True
-    tools = ["uvicorn"] if platform.system() == "Windows" else ["uvicorn"]
-    for tool in tools:
-        result = subprocess.run(
-            f"where {tool}" if platform.system() == "Windows" else f"which {tool}",
-            shell=True, capture_output=True
-        )
-        if result.returncode != 0:
-            print(f"  [WARN] '{tool}' not found on PATH — install it first.")
-            ok = False
-    return ok
+REPO_ROOT    = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
+BRIDGE_LOG   = os.path.join(REPO_ROOT, "bridge.log")
+STATIC_LOG   = os.path.join(REPO_ROOT, "static.log")
 
 
 def main() -> None:
     print("=" * 60)
-    print("  Ask-N-Seek v2.4  |  Development Launcher")
+    print("  Ask-N-Seek v2.5  |  Development Launcher")
     print("=" * 60)
 
-    print("\n[prereq] Checking tools...")
-    check_prereqs()
+    # ── 1. FastAPI Bridge ────────────────────────────────────────
+    # Run from REPO_ROOT so all engine imports resolve correctly.
+    bridge_cmd = [
+        sys.executable, "-m", "uvicorn",
+        "frontend.bridge_server:app",
+        "--host", "127.0.0.1",
+        "--port", "8000",
+        "--reload",
+    ]
+    print(f"\n[1/2] Starting Bridge → http://127.0.0.1:8000")
+    print(f"      Logs: {BRIDGE_LOG}")
+    bridge_log_fh = open(BRIDGE_LOG, "w", buffering=1)
+    bridge = subprocess.Popen(
+        bridge_cmd,
+        cwd=REPO_ROOT,           # critical: must be repo root for imports
+        stdout=bridge_log_fh,
+        stderr=subprocess.STDOUT,
+    )
+    print(f"      PID: {bridge.pid}")
 
-    # ── 1. FastAPI Bridge (bridge_server.py) ─────────────────────────────────
-    print("\n[1/2] Starting FastAPI Bridge on port 8000 ...")
-    # Launch uvicorn directly against bridge_server.py in frontend/ dir
-    bridge_cmd = f"{sys.executable} -m uvicorn bridge_server:app --reload --port 8000 --host 0.0.0.0"
-    run_in_terminal("ANS  Bridge :8000", FRONTEND_DIR, bridge_cmd)
-    time.sleep(2)
+    # ── 2. Static file server ────────────────────────────────────
+    static_cmd = [
+        sys.executable, "-m", "http.server",
+        "3000", "--bind", "127.0.0.1",
+    ]
+    print(f"\n[2/2] Starting Frontend → http://127.0.0.1:3000")
+    print(f"      Logs: {STATIC_LOG}")
+    static_log_fh = open(STATIC_LOG, "w", buffering=1)
+    static = subprocess.Popen(
+        static_cmd,
+        cwd=FRONTEND_DIR,
+        stdout=static_log_fh,
+        stderr=subprocess.STDOUT,
+    )
+    print(f"      PID: {static.pid}")
 
-    # ── 2. Static file server for the HTML frontend ───────────────────────────
-    print("[2/2] Starting HTML Static Server on port 3000 ...")
-    # Use Python's built-in http.server for zero-dependency static serving
-    static_cmd = f"{sys.executable} -m http.server 3000 --bind 127.0.0.1"
-    run_in_terminal("ANS  Frontend :3000", FRONTEND_DIR, static_cmd)
-    time.sleep(1)
-
-    print("\n" + "=" * 60)
-    print("  Services starting in separate terminals.")
+    # ── Wait for bridge to be ready ──────────────────────────────
+    print("\n  Waiting for bridge to be ready", end="", flush=True)
+    ready = False
+    for _ in range(20):
+        time.sleep(0.5)
+        print(".", end="", flush=True)
+        # Check process is still alive
+        if bridge.poll() is not None:
+            print("\n\n  ❌ Bridge died immediately! Check bridge.log:")
+            with open(BRIDGE_LOG) as f:
+                print(f.read()[-2000:])
+            static.terminate()
+            sys.exit(1)
+        # Try health check
+        try:
+            import urllib.request
+            urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=1)
+            ready = True
+            break
+        except Exception:
+            pass
     print()
-    print("  Bridge    →  http://localhost:8000")
-    print("  Frontend  →  http://localhost:3000")
-    print("  Docs      →  http://localhost:8000/docs")
+
+    if not ready:
+        print("  ⚠️  Bridge health check timed out — check bridge.log")
+    else:
+        print("  ✅ Bridge is healthy")
+
+    print()
+    print("=" * 60)
+    print("  Open → http://127.0.0.1:3000/index.html")
+    print()
+    print("  Bridge   → http://127.0.0.1:8000")
+    print("  API Docs → http://127.0.0.1:8000/docs")
     print()
     print("  Quick test:")
-    print("    curl http://localhost:8000/health")
-    print("    curl http://localhost:8000/scenarios")
+    print("    curl http://127.0.0.1:8000/health")
     print()
-    print("  Open  http://localhost:3000/index.html  in your browser.")
+    print("  Press Ctrl+C to stop both servers.")
     print("=" * 60)
+
+    # ── Monitor loop ─────────────────────────────────────────────
+    try:
+        while True:
+            time.sleep(2)
+            if bridge.poll() is not None:
+                print("\n  ❌ Bridge server died! Last 50 lines of bridge.log:")
+                with open(BRIDGE_LOG) as f:
+                    lines = f.readlines()
+                print("".join(lines[-50:]))
+                print("  Restart with: python start_dev.py")
+                break
+            if static.poll() is not None:
+                print("\n  ❌ Static server died! Check static.log")
+                break
+    except KeyboardInterrupt:
+        print("\n\n  Shutting down...")
+    finally:
+        bridge.terminate()
+        static.terminate()
+        bridge_log_fh.close()
+        static_log_fh.close()
+        print("  Done.")
 
 
 if __name__ == "__main__":
