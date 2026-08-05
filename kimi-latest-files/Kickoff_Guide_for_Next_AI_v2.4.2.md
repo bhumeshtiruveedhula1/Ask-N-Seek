@@ -27,11 +27,13 @@
 git clone https://github.com/bhumeshtiruveedhula1/Ask-N-Seek.git
 cd Ask-N-Seek
 git checkout stable_merge
-git log --oneline -3
+git log --oneline -5
 # Expected:
+# 308d5fb feat(phase7): typo auto-correction via difflib 0.70 ratio
+# b4cdb2f feat(phase6): touching/near spatial relations, wearing->in
+# deac856 fix(phase5): class-specific confidence gates, accessory NMS 0.40
 # 20a8744 feat(frontend): rebuild HTML v2 with Prompts 1-5 features
 # 29ceb5e fix: add core backend files
-# 37a4fa3 chore(frontend): remove tracked Next.js source files
 ```
 
 ### Step 2: Verify Core Files Exist
@@ -184,18 +186,20 @@ curl http://localhost:8000/scenarios
 
 ### DO NOT BUILD ANYTHING NEW.
 
-The system is built. The code is passing. The differentiation is real.
+The system is structurally complete through Phase 7 (commit 308d5fb).
 
 ### What the human probably wants next:
-1. **Rehearsal script** — 60-second flow narration
+1. **REHEARSAL** — Run the 60-second demo flow 5 times with different videos
 2. **Edge case test list** — what to try during rehearsal
 3. **Demo day checklist** — hardware, backup plans, error messages
 4. **Fresh clone validation** — test on teammate's machine
-5. **Backend optimization** — ONLY if rehearsal is done and time permits
 
 ### What he does NOT want:
 - More backend features
-- More frontend polish
+- More spatial relations (behind/above/inside — locked out)
+- More parser tweaks
+- More vocabulary expansion
+- Frontend polish beyond what's already there
 - Cascade Vocabulary Fallback (rejected)
 - Voice Query (rejected)
 - Telemetry (rejected)

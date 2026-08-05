@@ -13,6 +13,8 @@
 ###   Real ingestion wired in bridge. Parser robustness, 6s clip playback,
 ###   context-aware presets, quick chips, top-10 objects, elapsed timer,
 ###   score bar micro-labels. 103/103 tests passing.
+### v2.5: Spatial expansion (touching/near/grabbing), typo auto-correction,
+###   wearing→in preprocessing, tshirt/handle synonyms, ambiguous class gates.
 
 ---
 
@@ -64,16 +66,23 @@ model on the critical path.
   - Code-mixed / Hinglish queries (best-effort)
 - **Primary, required parser: rule-based / dependency-parse-based
   attribute binding — not flat keyword extraction.**
-- **Pre-processing layer (v2.4.1):**
+- **Pre-processing layer (v2.4.1 + v2.5):**
   - Normalize "with no" / "having no" / "wearing no" → "without"
   - Split color+object compounds: "redshirt" → "red shirt", "bluecar" → "blue car"
   - Synonym expansion: woman, man, lady, gentleman → "person"
+  - **Wearing → "in" (v2.5):** "person wearing red shirt" → "person in red shirt"
+    for garment color binding. Negation-safe: "not wearing" preserved unchanged.
+  - **Typo auto-correction (v2.5):** difflib SequenceMatcher.ratio >= 0.70 on all
+    OOV query tokens before spaCy. "grabing"→"grabbing", "helmmet"→"helmet".
+    Structural words (more, than, fewer, exactly…) are protected from correction.
 - **Known accepted ceiling (v2.2):** The parser handles straightforward
   negation via surface phrase matching + proximity heuristics.
   Complex conjunctions may bind negation incorrectly. Accepted boundary.
-- **Spatial scope, locked:** only "left of" / "right of" phrasing is
-  recognized. "Near," "close to," "beside," and "next to" are explicitly
-  NOT parser trigger phrases.
+- **Spatial scope (v2.5):** "left of" / "right of" / "touching" / "grabbing" /
+  "holding" / "pulling" / "opening" / "near" / "next to" / "beside" /
+  "close to" are recognized parser trigger phrases. All map to one of four
+  stored relation types: `left_of`, `right_of`, `touching`, `near`.
+  "Above / inside / behind" remain explicitly locked out (2D-unreliable).
 - Curated synonym lookup table maps common terms onto the fixed
   vocabulary.
 - **Coverage & testing requirement:** a minimum enumerated pattern list
@@ -225,6 +234,8 @@ model on the critical path.
 - User accounts, auth, persistence beyond demo session
 - Mobile app / non-browser frontend
 - **Next.js 14 frontend** — replaced by HTML v2 in v2.4.1 for demo reliability.
+- **"Behind" spatial relation** — 2D-unreliable from single camera angle. Locked out.
+- **Pose estimation (sitting/standing)** — requires separate model. Not built.
 
 ## 6. Success Criteria
 

@@ -1,6 +1,6 @@
 # ASK-N-SEEK — QUICK START CARD (For Next AI)
 ## One-page cheat sheet. Read this first, then the full Master_Handoff_Report_v2.4.2.
-## v2.4.2 update: Frontend rebuilt after corruption. stable_merge @ 20a8744.
+## v2.5 update: Phase 5-7 complete. stable_merge @ 308d5fb.
 
 ---
 
@@ -9,7 +9,7 @@
 ```bash
 git clone https://github.com/bhumeshtiruveedhula1/Ask-N-Seek.git
 cd Ask-N-Seek
-git checkout stable_merge    # commit 20a8744 (latest)
+git checkout stable_merge    # commit 308d5fb (latest)
 pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 python start_dev.py
@@ -27,7 +27,11 @@ python start_dev.py
 | Live video ingestion | ✅ Real | Drop MP4 in upload zone, wait ~30–45s, see real progress |
 | Object detection | ✅ | YOLO-World-M, 800+ classes |
 | Color extraction | ✅ | Center-weighted crop + k-means |
-| Spatial relations | ✅ | Left/right only |
+| Spatial relations | ✅ | Left/right + touching/near (v2.5) |
+| Touching spatial | ✅ | "person touching car" — IoU overlap |
+| Near spatial | ✅ | "person near car" — edge-gap proximity |
+| Typo correction | ✅ | "grabing"→"grabbing", "helmmet"→"helmet" auto-correct |
+| Wearing queries | ✅ | "person wearing red shirt" → "person in red shirt" |
 | Query parsing | ✅ | spaCy dependency + preprocessing |
 | Structured search | ✅ | Qdrant payload filters |
 | No-Match Diagnosis | ✅ | Query "purple elephant" |
@@ -69,7 +73,7 @@ No injection scripts. No regex patches. Complete file writes only.
 - Rule-based parser — **do not add LLM**
 - Qdrant payload filters — **no embedding fallback**
 - Threshold 0.3197 — **do not recalibrate**
-- Left/right spatial only
+- Left/right/touching/near spatial (above/behind/inside remain locked out)
 - Architecture doc is law: `03_Architecture_Final_v2.4.1.md`
 - **HTML v2 frontend is locked** — do not revert to Next.js or Gradio for demo
 

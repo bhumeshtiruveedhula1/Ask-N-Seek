@@ -1,7 +1,7 @@
 # ASK-N-SEEK — MASTER HANDOFF REPORT v2.4.2
-## Session: 2026-08-04 (Frontend Corruption Recovery + Clean Rebuild)
-## From: Kimi (Moonshot AI) | To: Next AI Agent
-## Status: SYSTEM COMPLETE | Tests: 103/103 Passing | Commit: 20a8744
+## Session: 2026-08-04 to 2026-08-05 (Corruption Recovery + Phase 5-7 Hardening)
+## From: Kimi (Moonshot AI) + Antigravity (Claude) | To: Next AI Agent
+## Status: SYSTEM COMPLETE | Tests: 103/103 Passing | Commit: 308d5fb
 
 ---
 
@@ -11,14 +11,14 @@
 git clone https://github.com/bhumeshtiruveedhula1/Ask-N-Seek.git
 cd Ask-N-Seek
 git checkout stable_merge
-# Primary branch: stable_merge @ commit 20a8744
+# Primary branch: stable_merge @ commit 308d5fb
 ```
 
 **Repository:** `https://github.com/bhumeshtiruveedhula1/Ask-N-Seek`
 **Primary branch:** `stable_merge` (was `integration/part3`, now merged forward)
 **Fallback branch:** `integration/part3` @ `29ceb5e`
-**Latest commit:** `20a8744` — "feat(frontend): rebuild HTML v2 with Prompts 1-5 features"
-**Previous commit:** `29ceb5e` — "fix: add core backend files"
+**Latest commit:** `308d5fb` — "feat(phase7): typo auto-correction via difflib 0.70 ratio"
+**Previous stable:** `20a8744` — "feat(frontend): rebuild HTML v2 with Prompts 1-5 features"
 
 ---
 
@@ -40,23 +40,31 @@ This session was a **corruption recovery and clean rebuild session** — not new
 
 | Commit | Message | What Changed |
 |---|---|---|
+| `308d5fb` | feat(phase7): typo auto-correction via difflib 0.70 ratio | `backend/query/query_parser.py` — `_correct_typos()`, `_QUERY_KNOWN_TOKENS` |
+| `b4cdb2f` | feat(phase6): touching/near spatial, wearing→in, tshirt/handle synonyms | `backend/vision/spatial.py`, `backend/query/patterns.py`, `backend/query/query_parser.py`, `backend/vision/vocabulary.py`, `config.py` |
+| `deac856` | fix(phase5): ambiguous class disambiguation, HIGH_VARIANCE_CLASSES gates | `backend/vision/vocabulary.py`, `config.py`, `engine/live_ingestor.py` |
 | `20a8744` | feat(frontend): rebuild HTML v2 with Prompts 1-5 features | Clean rebuild of `frontend/app.js`, `index.html`, `styles.css` |
 | `29ceb5e` | fix: add core backend files | Previous stable base (backend only) |
 | `37a4fa3` | chore(frontend): remove tracked Next.js source files | Historical — Next.js removal |
 
-**Backend tests: 103/103 passing. Zero regressions. Zero backend files touched.**
+**Backend tests: 103/103 passing. Zero regressions. Zero backend tests broken across all 7 phases.**
 
 ---
 
 ## 2. CURRENT FEATURES (All Working)
 
-### Backend (Locked, Untouched)
-- YOLO-World-M detection, CIELAB color, left/right spatial
+### Backend (Locked, Untouched core + v2.5 additions)
+- YOLO-World-M detection, CIELAB color, left/right/touching/near spatial
 - Qdrant payload filters + keyword indexes
-- Rule-based spaCy parser with preprocessing
+- Rule-based spaCy parser with preprocessing (typo correction, wearing→in)
 - No-Match Diagnosis, Session Isolation, Threshold 0.3197
 - Smart Result Scoring (ScoreBreakdown dataclass)
 - Query Result Caching, Scenario Presets
+- **Touching/Grabbing/Holding spatial** — IoU overlap detection (v2.5)
+- **Near/Beside/Next-to spatial** — edge-gap proximity (v2.5)
+- **Typo auto-correction** — OOV tokens corrected before parsing (v2.5)
+- **Wearing preprocessing** — "person wearing red shirt" parses correctly (v2.5)
+- **Ambiguous class gates** — HIGH_VARIANCE_CLASSES at 0.45 confidence (v2.5)
 
 ### Frontend (Rebuilt, Verified)
 - **Bright terminal logs** — qlog glow colors (blue/green/red/amber)
@@ -96,6 +104,7 @@ This session was a **corruption recovery and clean rebuild session** — not new
 ### Backend Tests
 ```
 103 passed, 2 warnings, 0 regressions
+Across all 7 phases. Edge cases: 7/7 PASS.
 ```
 
 ### TypeScript Check
@@ -273,7 +282,9 @@ Give them:
 You are continuing a hackathon build for Ask-N-Seek, a natural-language
 video retrieval system. The base system is complete (103/103 tests passing).
 Frontend was corrupted during Prompts 3-4 by newline-injection bugs and has
-been cleanly rebuilt at commit 20a8744 on stable_merge.
+been cleanly rebuilt. Phases 5-7 added ambiguous class disambiguation,
+touching/near spatial relations, typo auto-correction, and garment preprocessing.
+All at commit 308d5fb on stable_merge.
 
 Your job is execution coordinator, not architect. All technical decisions
 are locked in 03_Architecture_Final_v2.4.1.md. Do not propose alternatives.
@@ -285,7 +296,7 @@ Model routing: Claude Sonnet for logic, Gemini Flash for bulk UI.
 Always verify with raw evidence (pytest, timing numbers, node --check).
 
 Git: https://github.com/bhumeshtiruveedhula1/Ask-N-Seek
-Branch: stable_merge (commit 20a8744)
+Branch: stable_merge (commit 308d5fb)
 ```
 
 ---

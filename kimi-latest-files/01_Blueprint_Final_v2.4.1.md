@@ -13,6 +13,8 @@
 ###   aesthetic) for zero-build demo reliability. Real ingestion wired in bridge.
 ###   Parser robustness, 6s clip playback, context-aware presets, top-10 objects,
 ###   elapsed timer, score bar micro-labels. 103/103 tests passing.
+### v2.5 change: Spatial expansion (touching/near), typo auto-correction,
+###   garment queries (wearing→in), ambiguous class disambiguation.
 
 ## What we're building
 A system where a user types a plain-language description of an event —
@@ -24,6 +26,22 @@ at once.
 
 ## What changed in v2.4.1 (and why)
 
+### v2.5 change: Spatial expansion + Typo correction (2026-08-05)
+- **Ambiguous class disambiguation:** bat→baseball bat, stick→hockey stick,
+  rod→fishing rod, net→tennis net, board→skateboard. HIGH_VARIANCE_CLASSES
+  confidence gates at 0.45.
+- **Touching/grabbing/holding/pulling/opening** → IoU overlap spatial relation
+  stored at ingestion; maps to `"touching"` in Qdrant payload.
+- **Near/next to/beside/close to** → edge-gap proximity spatial relation
+  (`SPATIAL_NEAR_GAP_PX=50`) stored at ingestion.
+- **Wearing → "in" preprocessing** for color binding:
+  `"person wearing red shirt"` → `"person in red shirt"` (negation-safe).
+- **Tshirt/tee-shirt → shirt, handle → door handle** synonyms added.
+- **Typo auto-correction:** difflib SequenceMatcher >= 0.70 on all OOV
+  query tokens. "grabing"→"grabbing", "helmmet"→"helmet", "persn"→"person".
+  Structural words (more, than, fewer…) protected from correction.
+
+### v2.4.1 change (and why)
 **Frontend pivot: Next.js 14 → HTML/CSS/JS v2.**
 The Next.js frontend (built in Session 3) was presentation-complete but its
 FastAPI Bridge `/ingest/start` endpoint was stubbed — it returned a static
@@ -111,8 +129,14 @@ is what lets the system answer negation, counting, and spatial queries
 16. ✅ Context-Aware Presets + Quick Chips — relevance filtering. (DONE)
 17. ✅ Top-10 Objects Grid — post-ingestion summary. (DONE)
 18. ✅ Parser Robustness — compounds, synonyms, suggestion quality. (DONE)
-19. Audio (Whisper transcript search) — built after the above works.
-20. **Local LLM upgrade (stretch goal, last)** — only if time remains.
+19. ✅ Ambiguous Class Disambiguation — bat→baseball bat, stick→hockey stick,
+    rod→fishing rod, net→tennis net, board→skateboard. (DONE v2.5)
+20. ✅ Touching/Near Spatial Relations — IoU overlap + edge-gap proximity.
+    (DONE v2.5)
+21. ✅ Typo Auto-Correction — difflib 0.70 ratio on all OOV query tokens.
+    (DONE v2.5)
+22. Audio (Whisper transcript search) — built after the above works.
+23. **Local LLM upgrade (stretch goal, last)** — only if time remains.
 
 ## Why this wins
 Almost every competing team will ship plain visual-similarity search and

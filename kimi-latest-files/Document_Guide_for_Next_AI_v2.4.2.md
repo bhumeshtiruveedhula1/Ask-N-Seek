@@ -12,15 +12,18 @@
 | `Kickoff_Guide_for_Next_AI_v2.4.2.md` | Execution coordinator rules + how to pull from git + verification checklist | ✅ NEW — supersedes v2.4.1 |
 | `Quick_Start_Card_v2.4.2.md` | One-page cheat sheet for immediate pull-and-run (updated for stable_merge @ 20a8744) | ✅ NEW — supersedes v2.4.1 |
 
-### 2. CANONICAL — v2.4.1 Documents (Unchanged, Still Valid)
+### 2. CANONICAL — v2.4.1 Documents (Updated in-place to reflect v2.5)
 | File | Purpose | Status |
 |---|---|---|
-| `01_Blueprint_Final_v2.4.1.md` | One-page why/what + v2.4.1 wins | ✅ Still valid |
-| `02_PRD_Final_v2.4.1.md` | Functional requirements + HTML v2 scope | ✅ Still valid |
-| `03_Architecture_Final_v2.4.1.md` | Locked technical decisions + HTML v2 stack | ✅ Still valid |
+| `01_Blueprint_Final_v2.4.1.md` | One-page why/what + v2.4.1/v2.5 wins | ✅ Updated for v2.5 |
+| `02_PRD_Final_v2.4.1.md` | Functional requirements + HTML v2 scope | ✅ Updated for v2.5 |
+| `03_Architecture_Final_v2.4.1.md` | Locked technical decisions + HTML v2 stack | ✅ Updated for v2.5 |
 | `Upgrade_Report_v2.4.md` | Why upgrades were chosen + what was built in Sessions 1-3 | ✅ Unchanged (historical) |
 | `Team_Explanation_v2.4.md` | Plain-language brief for team | ✅ Unchanged (core still valid) |
 | `Detection_Engine_Decision_Record_v2.4.md` | Cascade research + skip decision + frontend pivot | ✅ Unchanged (decisions still locked) |
+
+> **Note:** All v2.4.1 docs updated in-place to reflect v2.5 spatial expansion +
+> typo correction. No new doc versions created — changes are additive.
 
 ### 3. DO NOT GIVE (Outdated)
 | File | Why | Status |
@@ -54,9 +57,9 @@ All 3 v2.4.2 docs + 6 v2.4.1 docs + git repo access.
 ```
 Repository:  https://github.com/bhumeshtiruveedhula1/Ask-N-Seek
 Branch:      stable_merge (primary)
-Commit:      20a8744
-Message:     feat(frontend): rebuild HTML v2 with Prompts 1-5 features
-Tests:       103/103 passing
+Commit:      308d5fb
+Message:     feat(phase7): typo auto-correction via difflib 0.70 ratio
+Tests:       103/103 passing | Edge cases: 7/7 PASS
 Frontend:    HTML v2 + FastAPI bridge, 5 files in fresh_clone/frontend/
              (index.html, app.js, styles.css, bridge_server.py, README.md)
 Status:      Local and remote in sync ✅

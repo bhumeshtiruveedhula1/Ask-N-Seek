@@ -14,6 +14,9 @@
 ###   wired in bridge_server.py. Parser preprocessing, 6s clip playback,
 ###   context-aware presets, quick chips, top-10 objects, elapsed timer,
 ###   score bar micro-labels, video serving endpoint.
+### v2.5: Touching/near spatial (IoU + edge-gap), typo auto-correction,
+###   wearing→in preprocessing, ambiguous class disambiguation (bat/stick/rod/
+###   net/board), HIGH_VARIANCE_CLASSES confidence gates at 0.45.
 
 ---
 
@@ -42,15 +45,17 @@
 │                                                                                        │
 │  User types a natural-language query (or clicks a Scenario Preset or Quick Chip)       │
 │       │                                                                                │
-│  PRE-PROCESSING LAYER (v2.4.1)                                                         │
+│  PRE-PROCESSING LAYER (v2.4.1 + v2.5)                                                   │
 │       - "with no" / "having no" / "wearing no" → "without"                            │
 │       - color+object compound splitting: "redshirt" → "red shirt"                     │
 │       - synonym expansion: woman/man/lady/gentleman → "person"                        │
+│       - wearing → "in" (v2.5, negation-safe): garment color binding                   │
+│       - typo auto-correction (v2.5): difflib 0.70 ratio on OOV tokens                 │
 │       │                                                                                │
 │  RULE-BASED QUERY PARSER (required, primary — no model inference)                       │
 │       - pattern-matches: negation ("without X", "no X", "lacking X"),                  │
 │         counting ("more than N", "exactly N"),                                          │
-│         spatial ("left of", "right of" ONLY — no "near"/"close to"),                    │
+│         spatial: left_of/right_of (centroid), touching (IoU>0.15), near (gap<50px),   │
 │         compositional (object + attribute combinations)                                 │
 │       - maps synonyms onto the fixed vocabulary via a curated lookup table              │
 │       - binds modifiers to nouns via spaCy amod/compound/neg edges                     │
@@ -160,11 +165,16 @@
 | Scene chunking | PySceneDetect, downscale_factor=2, timestamp-then-seek memory pattern | Locked ✅ |
 | Frame resize | Max 720p height, aspect-preserved, before save | Locked ✅ |
 | Duration cap | MAX_DURATION_S=180, auto-trim + warning | Locked ✅ |
-| Spatial relations | Left/right only, top-4-confidence pairs | Locked ✅ |
+| Spatial relations | Left/right/touching/near, top-4-confidence pairs (left/right); all pairs (touching/near) | Locked ✅ (v2.5) |
+| Ambiguous class gates | HIGH_VARIANCE_CLASSES: 0.45 confidence for bat/kite/skis/stick/rod/net/board | Locked ✅ (v2.5) |
 | Structured store | Qdrant, payload filters + **keyword indexes on class_name, color, spatial_relations** | Locked ✅ |
 | Session isolation | Per-session collections: `judge_session_<uuid>` | Locked ✅ |
 | Query parser | **Rule-based / pattern-matching (required, primary)** | Locked ✅ |
-| Parser preprocessing | "with no" → "without", compound splitting, synonym expansion | Locked ✅ (v2.4.1) |
+| Parser preprocessing | "with no" → "without", compound splitting, synonym expansion, wearing→in, typo correction | Locked ✅ (v2.5) |
+| Parser typo correction | difflib SequenceMatcher >= 0.70 on OOV tokens, structural words protected | Locked ✅ (v2.5) |
+| Touching spatial | IoU > 0.15 between any pair of bboxes → "touching" relation stored in Qdrant | Locked ✅ (v2.5) |
+| Near spatial | Edge-to-edge gap < SPATIAL_NEAR_GAP_PX (50px) → "near" relation stored in Qdrant | Locked ✅ (v2.5) |
+| Wearing preprocess | "wearing" → "in" before spaCy (negative lookbehind guards negation phrases) | Locked ✅ (v2.5) |
 | Explanation generation | **Templated from structured facts (required, primary)** | Locked ✅ |
 | No-Match Diagnosis | Decomposed sub-queries + closest miss relaxation | Locked ✅ |
 | Threading model | Background daemon thread + queue.Queue for ingestion handlers | Locked ✅ |
