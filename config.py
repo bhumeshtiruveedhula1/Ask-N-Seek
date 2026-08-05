@@ -153,6 +153,11 @@ EARLY_CONFIDENCE_FILTER: float = 0.30
 # Set to 1 to disable this filter (show all classes including single-frame detections).
 MIN_FRAME_PRESENCE: int = 2
 
+# Edge-to-edge pixel gap below which two detected objects are considered "near".
+# Used by spatial.py compute_spatial_relations() for the "near" relation type.
+# Increase for wider proximity detection; decrease to require closer objects.
+SPATIAL_NEAR_GAP_PX: int = 50
+
 # ---------------------------------------------------------------------------
 # Per-class confidence gates (overrides EARLY_CONFIDENCE_FILTER for specific classes)
 # ---------------------------------------------------------------------------

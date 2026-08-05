@@ -121,10 +121,11 @@ def parse_count_token(raw: str | None, pattern_idx: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Spatial  (LOCKED: left_of / right_of ONLY)
+# Spatial  (left_of / right_of / touching / near)
 # ---------------------------------------------------------------------------
 
 SPATIAL_TRIGGERS: list[tuple[re.Pattern, str]] = [
+    # --- Left / Right (existing — PRESERVED exactly) ---
     (re.compile(r"\bleft\s+of\b",  re.I), "left_of"),
     (re.compile(r"\bto\s+the\s+left\s+of\b",  re.I), "left_of"),
     (re.compile(r"\bon\s+the\s+left\s+of\b",   re.I), "left_of"),
@@ -133,10 +134,27 @@ SPATIAL_TRIGGERS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bon\s+the\s+right\s+of\b",  re.I), "right_of"),
     (re.compile(r"\bto\s+(?:its|the|a)\s+left\b",  re.I), "left_of"),
     (re.compile(r"\bto\s+(?:its|the|a)\s+right\b", re.I), "right_of"),
+
+    # --- Touching / Action verbs (NEW) ---
+    # Overlapping bboxes (IoU > 0.15) stored as "touching" at ingestion.
+    # All physical-contact action verbs map to the same relation type.
+    (re.compile(r"\btouching\b", re.I), "touching"),
+    (re.compile(r"\bgrabbing\b", re.I), "touching"),
+    (re.compile(r"\bholding\b",  re.I), "touching"),
+    (re.compile(r"\bpulling\b",  re.I), "touching"),
+    (re.compile(r"\bopening\b",  re.I), "touching"),
+
+    # --- Proximity (NEW) ---
+    # Edge-to-edge gap < SPATIAL_NEAR_GAP_PX stored as "near" at ingestion.
+    (re.compile(r"\bnear\b",           re.I), "near"),
+    (re.compile(r"\bnear\s+to\b",      re.I), "near"),
+    (re.compile(r"\bnext\s+to\b",      re.I), "near"),
+    (re.compile(r"\bbeside\b",         re.I), "near"),
+    (re.compile(r"\bclose\s+to\b",     re.I), "near"),
 ]
 
-# Banned proximity patterns -- MUST NOT be recognised (Architecture ss6)
-_BANNED_SPATIAL: list[str] = ["near", "beside", "next to", "close to", "adjacent"]
+# Previously banned — now implemented via spatial.py edge-gap and IoU computation
+_BANNED_SPATIAL: list[str] = []
 
 # ---------------------------------------------------------------------------
 # Color vocabulary (must match CIELAB palette names from color_extractor.py)

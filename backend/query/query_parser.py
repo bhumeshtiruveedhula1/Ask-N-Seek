@@ -143,6 +143,15 @@ _LACKING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Task 3: "wearing" → "in" for positive garment color binding.
+# "person wearing red shirt" → "person in red shirt" → color=red binds to person.
+# NEGATIVE LOOKBEHIND: preserves "not wearing", "isn't wearing", "is not wearing"
+# so negation phrases in NEGATION_PHRASES still trigger correctly.
+_WEARING_RE = re.compile(
+    r"(?<!not )(?<!isn't )(?<!is not )(?<!doesn't )\bwearing\b",
+    re.IGNORECASE,
+)
+
 def _preprocess_query(query: str) -> str:
     """
     Normalise common user phrasings before spaCy parsing.
@@ -166,6 +175,13 @@ def _preprocess_query(query: str) -> str:
     q = _WITH_NO_RE.sub("without ", query)    # "with no X" → "without X" (Task 1 kept here)
     q = _BARE_NO_RE.sub(" without ", q)       # "X no Y"    → "X without Y"
     q = _LACKING_RE.sub("without ", q)        # "lacking X" → "without X"
+
+    # Task 3: "wearing" → "in" for garment color binding.
+    # "person wearing red shirt" → "person in red shirt" so the spaCy color
+    # binder picks up color=red on the "person" object via existing "in" logic.
+    # Run AFTER negation normalization: "wearing no" already became "without",
+    # and lookbehind guards "not wearing"/"isn't wearing" from being altered.
+    q = _WEARING_RE.sub("in", q)              # "wearing X" → "in X" (positive only)
 
     # Task 2: split runtogethercolor+noun compounds, word by word
     tokens = q.split()

@@ -295,6 +295,12 @@ SYNONYM_MAP: dict[str, str] = {
     "safety jacket": "vest",
     "goggles":       "goggles",
     "tee":           "shirt",
+    "tshirt":        "shirt",     # "person wearing tshirt" → searches "shirt"
+    "tee-shirt":     "shirt",     # hyphenated variant
+    "t-shirt":       "shirt",     # with hyphen
+
+    # Handle: maps to "door handle" (specific term in _RAW, more discriminative than "door")
+    "handle":        "door handle",   # "car handle", "door handle" → specific vocab term
 
     # Accessories
     "knapsack":      "backpack",
