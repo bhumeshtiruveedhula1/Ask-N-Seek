@@ -53,15 +53,38 @@ _COLOR_FAMILIES: dict[str, list[str]] = {
 # When user says "white car", class filter must also cover sedan/minivan etc.
 # ---------------------------------------------------------------------------
 _CLASS_FAMILIES: dict[str, list[str]] = {
+    # ── Vehicles (unchanged) ─────────────────────────────────────────────────
     "car":        ["car", "sedan", "minivan", "suv", "jeep", "pickup",
                    "hatchback", "van", "coupe", "auto", "vehicle", "automobile"],
     "truck":      ["truck", "pickup", "lorry", "van", "cargo"],
     "bus":        ["bus", "minibus", "coach"],
     "motorcycle": ["motorcycle", "motorbike", "scooter", "bike"],
     "bicycle":    ["bicycle", "bike", "cycle"],
+    # ── People (unchanged) ───────────────────────────────────────────────────
     "person":     ["person", "man", "woman", "child", "boy", "girl",
                    "pedestrian", "human", "people", "guard", "officer",
                    "worker", "warden", "suspect", "intruder"],
+    # ── Fire safety ──────────────────────────────────────────────────────────
+    "extinguisher":      ["extinguisher", "fire extinguisher"],
+    "fire extinguisher": ["extinguisher", "fire extinguisher"],
+    # ── Office / seminar hall / building objects ──────────────────────────────
+    "chair":    ["chair", "seat", "stool", "armchair"],
+    "bench":    ["bench", "seat"],
+    "table":    ["table", "desk", "counter"],
+    "bottle":   ["bottle", "water bottle", "flask"],
+    "trash":    ["trashcan", "trash can", "bin", "dustbin", "garbage",
+                 "waste bin", "rubbish bin", "trash bin"],
+    "bin":      ["bin", "trashcan", "dustbin", "waste bin", "trash can"],
+    "bucket":   ["bucket", "pail"],
+    "fan":      ["fan", "electric fan", "ceiling fan"],
+    "speaker":  ["speaker", "loudspeaker", "audio speaker"],
+    "curtain":  ["curtain", "drape", "blind"],
+    "window":   ["window", "glass window"],
+    "stage":    ["stage", "platform", "podium", "dais"],
+    # ── Personal items (common in offices/halls) ─────────────────────────────
+    "bag":      ["bag", "backpack", "handbag", "suitcase", "luggage", "briefcase"],
+    "phone":    ["phone", "mobile phone", "cell phone", "smartphone"],
+    "laptop":   ["laptop", "notebook", "computer"],
 }
 
 
