@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════
-   ASK-N-SEEK  frontend_vexed/app.js
+   GARUDA GAMANA  frontend_vexed/app.js
    Merges frontend/ features + preserves vexed galaxy + chat bot
    API_BASE → bridge_server.py on http://localhost:8000
    ════════════════════════════════════════════════════════════════ */
@@ -736,11 +736,23 @@ function renderResults(data) {
 function renderScoreBars(sb, parsed) {
   const filters = (parsed && parsed.filters) ? parsed.filters : null;
 
-  function getMicroLabel(category, score) {
+  function getMicroLabel(category) {
     if (!filters) return '';
-    if (category === 'color'    && (filters.color          == null)) return 'No color constraint';
-    if (category === 'spatial'  && (filters.spatial_relation == null)) return 'No spatial constraint';
-    if (category === 'negation' && (!filters.negated || !filters.negated.length)) return 'No negation constraint';
+    if (category === 'color') {
+      return filters.color != null ? `color: ${filters.color}` : 'No color filter';
+    }
+    if (category === 'spatial') {
+      if (filters.spatial_relation == null) return 'No spatial constraint';
+      const sr = filters.spatial_relation;
+      return `${sr.type || 'near'}: ${sr.target_class || '?'}`;
+    }
+    if (category === 'negation') {
+      if (!filters.negated || !filters.negated.length) return 'No negation constraint';
+      return `\u00ac ${filters.negated.join(', ')}`;
+    }
+    if (category === 'object') {
+      return filters.class ? `class: ${filters.class}` : '';
+    }
     return '';
   }
 
@@ -750,19 +762,23 @@ function renderScoreBars(sb, parsed) {
     { label: 'Spatial',  score: sb.spatial_score   || 0, max: 20, category: 'spatial' },
     { label: 'Negation', score: sb.negation_score  || 0, max: 20, category: 'negation' },
   ];
-  const total = sb.total || 0;
+  const total   = sb.total || 0;
+  const details = sb.details || {};
 
   let html = '<div class="score-bars">';
   bars.forEach(b => {
-    const pct  = Math.min(100, Math.round((b.score / b.max) * 100));
-    const note = getMicroLabel(b.category, b.score);
-    html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+    const pct      = Math.min(100, Math.round((b.score / b.max) * 100));
+    const note     = getMicroLabel(b.category);
+    const barColor = b.score > 0 ? '#00e5ff' : 'rgba(255,255,255,0.12)';
+    const txtColor = b.score > 0 ? 'var(--accent-color)' : 'rgba(248,248,255,0.3)';
+    const detail   = (details[b.category] || '').replace(/"/g, '&quot;');
+    html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;" title="${detail}">
       <span style="font-family:var(--font-mono);font-size:0.6rem;color:rgba(248,248,255,0.4);min-width:52px;">${b.label}</span>
       <div style="flex:1;height:3px;background:rgba(255,255,255,0.06);">
-        <div style="height:100%;width:${pct}%;background:#00e5ff;transition:width 0.8s ease;"></div>
+        <div style="height:100%;width:${pct}%;background:${barColor};transition:width 0.8s ease;"></div>
       </div>
-      <span style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-color);min-width:20px;text-align:right;">${b.score}</span>
-      ${note ? `<span style="font-size:0.6rem;color:rgba(248,248,255,0.35);">${note}</span>` : ''}
+      <span style="font-family:var(--font-mono);font-size:0.6rem;color:${txtColor};min-width:20px;text-align:right;">${b.score}</span>
+      ${note ? `<span style="font-size:0.55rem;color:rgba(248,248,255,0.35);min-width:80px;">${note}</span>` : '<span style="min-width:80px;"></span>'}
     </div>`;
   });
   html += `<div style="display:flex;align-items:center;gap:8px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.04);padding-top:6px;">
@@ -865,7 +881,7 @@ window.playResult = function(idx) {
   state.currentClipEnd = clipEnd;
 
   const videoId = result.video_id || '';
-  const src     = API_BASE + '/video/' + videoId;
+  const src     = `${API_BASE}/video/${videoId}?t=${Date.now()}`;
 
   if (video.src !== src) video.src = src;
 
@@ -899,29 +915,52 @@ function replayClip() {
   video.play().catch(() => {});
 }
 
-// Also expose seekToTimestamp so vexed chat chips can seek the main video
-function seekToTimestamp(start, end) {
-  const video = document.getElementById('mainVideo');
+// seekToTimestamp — mirrors results-bar playResult() logic.
+// videoId: the result's own video_id (preferred over state.currentCollection).
+function seekToTimestamp(start, end, videoId) {
+  const video     = document.getElementById('mainVideo');
+  const videoArea = document.getElementById('videoPlayerArea');
   if (!video) return;
 
-  const videoId = state.currentCollection || '';
-  if (videoId) {
-    const src = API_BASE + '/video/' + videoId;
-    if (video.src !== src) video.src = src;
+  if (videoArea) videoArea.style.display = 'block';
+
+  const vidToUse = videoId || state.currentCollection || '';
+  if (vidToUse) {
+    const src = `${API_BASE}/video/${vidToUse}?t=${Date.now()}`;
+    if (video.src.split('?')[0] !== src.split('?')[0] || !video.src) {
+      video.src = src;
+      video.addEventListener('loadedmetadata', function onMeta() {
+        video.removeEventListener('loadedmetadata', onMeta);
+        video.currentTime = start;
+        if (end !== undefined && end !== null) state.currentClipEnd = end + 1;
+        setTimeout(() => {
+          video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
+        }, 100);
+      }, { once: true });
+      video.load();
+      video.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
   }
 
-  video.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  video.currentTime = start;
+  // Source already correct — seek directly
+  const doSeek = () => {
+    video.currentTime = start;
+    if (end !== undefined && end !== null) state.currentClipEnd = end + 1;
+    setTimeout(() => {
+      video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
+    }, 100);
+    video.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
 
-  setTimeout(() => {
-    video.play().catch(err => {
-      video.muted = true;
-      video.play().catch(() => {});
-    });
-  }, 600);
-
-  if (end !== undefined && end !== null) {
-    state.currentClipEnd = end + 1;
+  if (video.readyState >= 1) {
+    doSeek();
+  } else {
+    video.addEventListener('loadedmetadata', function onMeta2() {
+      video.removeEventListener('loadedmetadata', onMeta2);
+      doSeek();
+    }, { once: true });
+    if (video.src) video.load();
   }
 }
 
@@ -1032,13 +1071,12 @@ function hideTyping() {
   chatTyping.classList.add('hidden');
 }
 
-async function sendChatMessage(text) {
-  if (!state.currentCollection) {
-    appendBubble('ai', 'Please upload a video first before asking questions.');
-    return;
-  }
+async function sendChatMessage(text, displayText = null) {
+  // displayText: optional text to show in the user bubble.
+  // If omitted, the raw `text` is shown. This lets clarification buttons
+  // send structured payloads ("color: Red") while showing clean labels ("Red").
 
-  appendBubble('user', text);
+  appendBubble('user', displayText || text);
   chatInput.value = '';
   showTyping();
 
@@ -1046,17 +1084,29 @@ async function sendChatMessage(text) {
     const res  = await fetch(API_BASE + '/chat', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ text: text, video_id: state.currentCollection }),
+      // display_text: what the user sees (e.g. "Red"), used in XAI heading
+      // text: the actual payload (may be structured: "color: Red")
+      body: JSON.stringify({
+        text:         text,
+        video_id:     state.currentCollection || '',
+        display_text: displayText || null,
+      }),
     });
     const data = await res.json();
     hideTyping();
 
+    // ── Build reply fragment ──────────────────────────────────────────
     const fragment = document.createDocumentFragment();
 
-    const replyP = document.createElement('p');
-    replyP.textContent = data.reply || 'No response received.';
-    fragment.appendChild(replyP);
+    // ── 1. Main reply text (pre-formatted with newlines) ─────────────
+    if (data.reply) {
+      const pre = document.createElement('pre');
+      pre.className   = 'chat-reply-pre';
+      pre.textContent = data.reply;
+      fragment.appendChild(pre);
+    }
 
+    // ── 2. Language tag (non-English responses) ───────────────────────
     if (data.language_detected && data.language_detected !== 'en') {
       const langNames = { hi: 'Hindi', kn: 'Kannada', ta: 'Tamil', te: 'Telugu', ml: 'Malayalam' };
       const langTag   = document.createElement('div');
@@ -1065,25 +1115,84 @@ async function sendChatMessage(text) {
       fragment.appendChild(langTag);
     }
 
+    // ── 3. STRUCTURED CLARIFICATION CARD (Prompt 1: Interactive Refinement) ──
+    if (data.clarification_type === 'structured' && data.questions && data.questions.length > 0) {
+      const card = document.createElement('div');
+      card.className = 'clarification-card';
+
+      data.questions.forEach(q => {
+        const row = document.createElement('div');
+        row.className = 'clarification-row';
+
+        const label = document.createElement('span');
+        label.className   = 'clarification-question-label';
+        label.textContent = q.label;
+        row.appendChild(label);
+
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'clarif-btn-group';
+
+        q.options.forEach(opt => {
+          const btn = document.createElement('button');
+          btn.className   = 'clarif-option-btn';
+          btn.textContent = opt;
+
+          btn.addEventListener('click', () => {
+            // Disable all buttons in this card (prevent double submit)
+            card.querySelectorAll('.clarif-option-btn').forEach(b => {
+              b.disabled = true;
+              b.style.opacity = '0.45';
+            });
+            btn.style.opacity    = '1';
+            btn.style.background = 'var(--accent)';
+            btn.style.color      = '#000';
+
+            // API payload = "color: Red" | "spatial: Yes — near person" etc.
+            // Display text = just the option label ("Red", "Any color", "Skip")
+            // This keeps the chat bubble clean and human-readable.
+            const apiMsg     = `${q.id}: ${opt}`;
+            const displayMsg = (opt === 'Skip') ? `Skipped: ${q.label}` : opt;
+            sendChatMessage(apiMsg, displayMsg);
+          });
+
+          btnGroup.appendChild(btn);
+        });
+
+        row.appendChild(btnGroup);
+        card.appendChild(row);
+      });
+
+      fragment.appendChild(card);
+    }
+
+    // ── 4. Result timestamp chips ─────────────────────────────────────
     if (data.results && data.results.length > 0) {
-      const strip    = document.createElement('div');
+      const strip   = document.createElement('div');
       strip.className = 'chat-result-strip';
       const maxChips  = 8;
-      const showRes   = data.results.slice(0, maxChips);
 
-      showRes.forEach(r => {
-        const start = r.start !== undefined ? r.start : r.window;
-        const end   = r.end   !== undefined ? r.end   : start;
+      // Sync active video from result's video_id (same logic as results-bar flow)
+      if (data.results[0].video_id) {
+        state.currentCollection = data.results[0].video_id;
+      }
 
-        const chip = document.createElement('span');
+      data.results.slice(0, maxChips).forEach(r => {
+        const start   = r.start  !== undefined ? r.start  : (r.window !== undefined ? r.window : r.timestamp);
+        const end     = r.end    !== undefined ? r.end    : (start + 6);
+        const vidId   = r.video_id || state.currentCollection || '';
+
+        const chip  = document.createElement('span');
         chip.className = 'chat-result-chip';
         chip.innerHTML = `<span class="chip-icon">&#9654;</span> ${formatTime(start)}`;
         chip.title     = r.explanation || `Jump to ${formatTime(start)}`;
 
         chip.addEventListener('click', (e) => {
           e.stopPropagation();
+          // Mirror exact same flow as results-bar: set collection, switch view, then seek
+          if (vidId) state.currentCollection = vidId;
           switchView('results');
-          seekToTimestamp(start, end);
+          // 250ms gives switchView time to unhide #mainVideo before seekToTimestamp fires
+          setTimeout(() => seekToTimestamp(start, end, vidId), 250);
         });
         strip.appendChild(chip);
       });
@@ -1093,20 +1202,396 @@ async function sendChatMessage(text) {
         more.className   = 'chat-result-chip';
         more.textContent = `+${data.results.length - maxChips} more`;
         more.style.cursor  = 'default';
-        more.style.opacity = '0.6';
+        more.style.opacity = '0.5';
         strip.appendChild(more);
       }
 
       fragment.appendChild(strip);
+
+      // ── Auto-play: seek to BEST result (mirrors results-bar playResult(0)) ──
+      const best      = data.results[0];
+      const bestStart = best.start  !== undefined ? best.start
+                      : best.window !== undefined ? best.window
+                      : best.timestamp;
+      const bestEnd   = best.end !== undefined ? best.end : (bestStart + 6);
+      const bestVidId = best.video_id || state.currentCollection || '';
+      if (bestVidId) state.currentCollection = bestVidId;
+      setTimeout(() => {
+        switchView('results');
+        seekToTimestamp(bestStart, bestEnd, bestVidId);
+      }, 350);
     }
 
     appendBubble('ai', fragment);
 
+    // ── 5. PROGRESSIVE FILTER BAR update (Prompt 2) ──────────────────
+    if (data.filters_used) {
+      updateActiveFiltersBar(data.filters_used);
+    }
+
   } catch (err) {
     hideTyping();
-    appendBubble('ai', `Something went wrong: ${err.message}`);
+    appendBubble('ai', `Connection error: ${err.message}. Is the backend running on port 8000?`);
   }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// PROGRESSIVE FILTER CHIPS BAR  (Prompt 2: Progressive Filtering)
+// ═══════════════════════════════════════════════════════════════
+function updateActiveFiltersBar(filtersUsed) {
+  const bar   = document.getElementById('active-filters-bar');
+  const chips = document.getElementById('active-filter-chips');
+  if (!bar || !chips) return;
+
+  chips.innerHTML = '';
+
+  const defs = [
+    { key: 'class',            emoji: '🏷',  label: 'Object',   color: 'chip-green'  },
+    { key: 'color',            emoji: '🎨',  label: 'Color',    color: 'chip-blue'   },
+    { key: 'spatial_relation', emoji: '📍',  label: 'Spatial',  color: 'chip-purple' },
+    { key: 'negated',          emoji: '❌',  label: 'Excluded', color: 'chip-red'    },
+    { key: 'temporal_direction',emoji:'⏱',  label: 'Time',     color: 'chip-yellow' },
+  ];
+
+  let hasAny = false;
+  defs.forEach(({ key, emoji, label, color }) => {
+    const val = filtersUsed[key];
+    if (!val || (Array.isArray(val) && val.length === 0)) return;
+
+    hasAny = true;
+    const chip = document.createElement('span');
+    chip.className = `filter-chip ${color}`;
+
+    if (key === 'negated') {
+      chip.textContent = `${emoji} ${label}: ${val.join(', ')}`;
+    } else if (key === 'spatial_relation' && typeof val === 'object') {
+      chip.textContent = `${emoji} ${val.type?.replace('_', ' ')} ${val.target_class}`;
+    } else if (key === 'temporal_direction') {
+      chip.textContent = `${emoji} ${val === '>' ? 'after prev' : 'before prev'}`;
+    } else {
+      chip.textContent = `${emoji} ${label}: ${val}`;
+    }
+
+    chips.appendChild(chip);
+  });
+
+  bar.style.display = hasAny ? 'flex' : 'none';
+}
+
+// Wire "Clear All" button → DELETE session + hide bar
+document.addEventListener('DOMContentLoaded', () => {
+  const clearBtn = document.getElementById('clear-filters-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+      const sid = state.currentCollection || '';
+      if (sid) {
+        try {
+          await fetch(`${API_BASE}/chat/session/${sid}`, { method: 'DELETE' });
+        } catch (_) {}
+      }
+      const bar   = document.getElementById('active-filters-bar');
+      const chips = document.getElementById('active-filter-chips');
+      if (bar)   bar.style.display = 'none';
+      if (chips) chips.innerHTML   = '';
+      appendBubble('ai', 'Session cleared. Active filters have been reset.');
+    });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════
+// IN-CHAT VIDEO UPLOAD
+// Reuses the same /ingest/start + /ingest/status backend flow.
+// Shows a compact inline progress strip directly in the chat section.
+// ═══════════════════════════════════════════════════════════════
+function initChatUpload() {
+  const fileInput  = document.getElementById('chat-file-input');
+  const cupDiv     = document.getElementById('chat-upload-progress');
+  const cupBar     = document.getElementById('cup-bar');
+  const cupLabel   = document.getElementById('cup-label');
+
+  if (!fileInput) return;
+
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    // Reset for new upload
+    fileInput.value = '';
+    cupDiv.classList.remove('hidden');
+    cupBar.style.width  = '0%';
+    cupLabel.textContent = `Uploading "${file.name}"…`;
+    appendBubble('ai', `📎 Got it! Processing "${file.name}" — this may take a minute…`);
+
+    // 1. POST to /ingest/start
+    let jobId;
+    try {
+      const fd  = new FormData();
+      fd.append('video', file);   // server expects field name 'video' not 'file'
+      const res = await fetch(API_BASE + '/ingest/start', { method: 'POST', body: fd });
+      if (!res.ok) {
+        let errMsg = `HTTP ${res.status}`;
+        try { const e = await res.json(); errMsg = e.detail || e.error || errMsg; } catch(_) {}
+        throw new Error(errMsg);
+      }
+      const data = await res.json();
+      jobId = data.job_id;
+    } catch (err) {
+      cupDiv.classList.add('hidden');
+      appendBubble('ai', `Upload failed: ${err.message}. Try using the Upload tab instead.`);
+      return;
+    }
+
+    // 2. Poll /ingest/status/{job_id}
+    const phaseEmoji = {
+      starting:          '⚙',
+      scene_detection:   '🎬',
+      keyframe_extract:  '🖼',
+      yolo_detection:    '🔍',
+      color_extraction:  '🎨',
+      spatial_relations: '📍',
+      indexing:          '💾',
+      complete:          '✅',
+      error:             '❌',
+    };
+
+    const poll = setInterval(async () => {
+      try {
+        const res  = await fetch(`${API_BASE}/ingest/status/${jobId}`);
+        const data = await res.json();
+
+        const pct    = data.progress || 0;
+        const phase  = data.phase    || 'processing';
+        const status = data.status   || 'running';
+
+        cupBar.style.width   = `${pct}%`;
+        cupLabel.textContent = `${phaseEmoji[phase] || '⚙'} ${phase.replace('_', ' ')} — ${pct}%`;
+
+        if (status === 'complete') {
+          clearInterval(poll);
+          cupDiv.classList.add('hidden');
+
+          const videoId  = data.collection_name || jobId;
+          state.currentCollection = videoId;
+
+          // Clear previous session filters for the new video
+          const bar   = document.getElementById('active-filters-bar');
+          const chips = document.getElementById('active-filter-chips');
+          if (bar)   bar.style.display = 'none';
+          if (chips) chips.innerHTML   = '';
+
+          // Show top detected objects as a summary bubble
+          const topClasses = (data.top_classes || []).slice(0, 6).map(c => c.class).join(', ');
+          const summaryMsg = topClasses
+            ? `✅ Video indexed! I detected: ${topClasses}. Ask me anything!`
+            : `✅ Video indexed! Now ask me what you're looking for.`;
+          appendBubble('ai', summaryMsg);
+
+          // Update collection badge if visible (keep sync with upload section)
+          const badge = document.getElementById('collectionBadge');
+          const nameEl = document.getElementById('collectionName');
+          if (badge) badge.style.display = 'flex';
+          if (nameEl) nameEl.textContent  = videoId;
+
+        } else if (status === 'error') {
+          clearInterval(poll);
+          cupDiv.classList.add('hidden');
+          appendBubble('ai', `❌ Ingestion failed: ${data.message || 'Unknown error'}. Try the Upload tab.`);
+        }
+
+      } catch (err) {
+        clearInterval(poll);
+        cupDiv.classList.add('hidden');
+        appendBubble('ai', `Polling error: ${err.message}`);
+      }
+    }, 1500);
+  });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// CONVERSATIONAL OPENER  — video library / upload picker
+// ═══════════════════════════════════════════════════════════════
+let _chatOpenerShown = false;
+
+async function showChatOpener() {
+  if (_chatOpenerShown) return;
+  _chatOpenerShown = true;
+
+  // If a video is already active, greet and skip picker
+  if (state.currentCollection) {
+    appendBubble('ai',
+      `👋 Welcome back! Searching in: ${state.currentCollection}\n` +
+      `Ask me anything — e.g. "person near red car" or "anyone without helmet".`
+    );
+    return;
+  }
+
+  // Show thinking indicator while we fetch library
+  showTyping();
+
+  let libraryVideos = [];
+  try {
+    const res = await fetch(API_BASE + '/videos/list');
+    const data = await res.json();
+    libraryVideos = data.videos || [];
+  } catch (_) { /* backend not up yet — show upload CTA */ }
+
+  hideTyping();
+
+  if (libraryVideos.length === 0) {
+    // No library videos — direct upload CTA
+    const frag = document.createDocumentFragment();
+    const pre  = document.createElement('pre');
+    pre.className   = 'chat-reply-pre';
+    pre.textContent =
+      "👋 Hi! I'm Garuda Gamana, your AI CCTV analyst.\n\n" +
+      "To get started, upload a video and I'll search it for anything you ask — " +
+      "people, vehicles, colors, spatial relations, and more.";
+    frag.appendChild(pre);
+
+    // Upload button
+    const btn = document.createElement('button');
+    btn.className   = 'clarif-option-btn';
+    btn.textContent = '⬆ Upload a Video';
+    btn.style.marginTop = '10px';
+    btn.addEventListener('click', () => switchView('upload'));
+    frag.appendChild(btn);
+
+    appendBubble('ai', frag);
+    return;
+  }
+
+  // Library has videos — show picker
+  const frag = document.createDocumentFragment();
+  const pre  = document.createElement('pre');
+  pre.className   = 'chat-reply-pre';
+  pre.textContent =
+    "👋 Hi! I'm Garuda Gamana.\n\n" +
+    "Do you want to search an existing video from your library, or upload a new one?";
+  frag.appendChild(pre);
+
+  // Button group
+  const btnGroup = document.createElement('div');
+  btnGroup.className = 'clarif-btn-group';
+  btnGroup.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;';
+
+  libraryVideos.forEach(vid => {
+    const b = document.createElement('button');
+    b.className   = 'clarif-option-btn';
+    b.textContent = `🎬 ${vid.name} (${vid.size_mb} MB)`;
+    if (vid.already_ingested) {
+      b.title = 'Already indexed — instant search!';
+      b.style.borderColor = 'var(--accent)';
+    } else {
+      b.title = 'Will be indexed before searching (~1 min)';
+    }
+    b.addEventListener('click', async () => {
+      // Disable all buttons
+      btnGroup.querySelectorAll('button').forEach(x => { x.disabled = true; x.style.opacity = '0.45'; });
+      b.style.opacity = '1'; b.style.background = 'var(--accent)'; b.style.color = '#000';
+
+      appendBubble('user', vid.name);
+      showTyping();
+
+      try {
+        const res  = await fetch(API_BASE + '/videos/select', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ video_id: vid.video_id }),
+        });
+        const data = await res.json();
+        hideTyping();
+
+        if (data.status === 'ok') {
+          // Already ingested — instant active
+          state.currentCollection = vid.video_id;
+          appendBubble('ai',
+            `✅ Switched to "${vid.name}"!\n` +
+            `Now ask me anything — e.g. "person near red car" or "any vehicle without helmet".`
+          );
+        } else if (data.status === 'ingesting') {
+          // Needs ingestion — show progress
+          state.currentCollection = null;
+          const progressDiv = document.createElement('div');
+          progressDiv.innerHTML =
+            `<div style="margin:8px 0">⚙ Indexing <b>${vid.name}</b>…<br>` +
+            `<div class="progress-bar-outer" style="background:#222;border-radius:6px;height:8px;margin-top:6px">` +
+            `<div id="lib-prog-bar" class="progress-bar-inner" style="width:0%;height:100%;background:var(--accent);border-radius:6px;transition:width 0.4s"></div>` +
+            `</div><span id="lib-prog-label" style="font-size:0.75rem;opacity:0.7">Starting…</span></div>`;
+          appendBubble('ai', progressDiv);
+
+          // Poll ingestion status
+          const pollLib = setInterval(async () => {
+            try {
+              const sr   = await fetch(`${API_BASE}/ingest/status/${data.job_id}`);
+              const sd   = await sr.json();
+              const pct  = sd.progress || 0;
+              const phase = sd.phase || 'processing';
+              const bar  = document.getElementById('lib-prog-bar');
+              const lbl  = document.getElementById('lib-prog-label');
+              if (bar) bar.style.width = `${pct}%`;
+              if (lbl) lbl.textContent = `${phase.replace('_', ' ')} — ${pct}%`;
+
+              if (sd.status === 'complete') {
+                clearInterval(pollLib);
+                const videoId = sd.collection_name || vid.video_id;
+                state.currentCollection = videoId;
+                appendBubble('ai',
+                  `✅ "${vid.name}" indexed and ready!\n` +
+                  `Ask me anything — e.g. "person near red car".`
+                );
+              } else if (sd.status === 'error') {
+                clearInterval(pollLib);
+                appendBubble('ai', `❌ Indexing failed: ${sd.message || 'Unknown error.'}`);
+              }
+            } catch (_) { clearInterval(pollLib); }
+          }, 1500);
+        } else {
+          hideTyping();
+          appendBubble('ai', `❌ ${data.message || 'Could not load video.'}`);
+        }
+      } catch (err) {
+        hideTyping();
+        appendBubble('ai', `❌ Error: ${err.message}`);
+      }
+    });
+    btnGroup.appendChild(b);
+  });
+
+  // Upload new option
+  const uploadBtn = document.createElement('button');
+  uploadBtn.className   = 'clarif-option-btn';
+  uploadBtn.textContent = '⬆ Upload New Video';
+  uploadBtn.addEventListener('click', () => switchView('upload'));
+  btnGroup.appendChild(uploadBtn);
+
+  frag.appendChild(btnGroup);
+  appendBubble('ai', frag);
+}
+
+function initChatOpener() {
+  // Show opener on EVERY click of the Chat nav button (not just first time)
+  // This allows switching videos at any time
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    if (btn.dataset.target === 'dashboard') {
+      btn.addEventListener('click', () => {
+        // Reset one-shot guard so picker always appears on nav click
+        _chatOpenerShown = false;
+        setTimeout(showChatOpener, 200);
+      });
+    }
+  });
+
+  // On first load, show opener if dashboard is the default view
+  setTimeout(() => {
+    const dashSection = document.getElementById('chat-section');
+    if (dashSection && !dashSection.classList.contains('hidden')) {
+      showChatOpener();
+    }
+  }, 800);
+}
+
 
 // ═══════════════════════════════════════════════════════════════
 // INITIALIZE
@@ -1116,7 +1601,9 @@ document.addEventListener('DOMContentLoaded', () => {
   initSearch();
   initVideoPlayer();
   initHistory();
+  initChatUpload();
+  initChatOpener();   // ← conversational video picker on first open
   checkBackend();
 
-  console.log('Ask-N-Seek v3.0 — Vexed + frontend/ merged. Ready.');
+  console.log('Garuda Gamana v3.0 — Vexed + frontend/ merged. Ready.');
 });

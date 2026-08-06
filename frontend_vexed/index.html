@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ask-N-Seek | Video Intelligence</title>
+    <title>Garuda Gamana | Video Intelligence</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:wght@400;600&display=swap" rel="stylesheet">
@@ -27,7 +27,7 @@
         <header class="app-header reveal">
             <div class="logo-box">
                 <span class="logo-icon">✧</span>
-                <span class="logo-text">Ask<span class="logo-highlight">N</span>Seek</span>
+                <span class="logo-text">Garuda<span class="logo-highlight">G</span>amana</span>
             </div>
         </header>
 
@@ -197,12 +197,26 @@
              ═════════════════════════════════════════════ -->
         <section id="chat-section" class="reveal hidden">
             <h2 class="section-title">Chat with Your Footage</h2>
+
+            <!-- ── ACTIVE FILTERS BAR (Progressive Filtering) ── -->
+            <div id="active-filters-bar" style="display:none;">
+                <span class="af-label">Active Filters:</span>
+                <div id="active-filter-chips"></div>
+                <button id="clear-filters-btn" class="af-clear-btn">✕ Clear All</button>
+            </div>
+
             <div class="chat-container">
                 <div id="chat-messages" class="chat-messages">
                     <div class="chat-bubble ai-bubble">
                         <div class="bubble-avatar">✧</div>
                         <div class="bubble-content">
-                            <p>Hey! I'm your video assistant. Ask me anything about the footage — in English, Hindi, or Kannada.</p>
+                            <p>👋 Hi! I'm <strong>Garuda Gamana</strong> — your AI-powered video surveillance analyst.</p>
+                            <p style="margin-top:8px;">To get started, click <strong>⇪</strong> below to upload a video, then ask me things like:</p>
+                            <p style="margin-top:6px;font-size:0.82em;opacity:0.75;">
+                                • "person next to red car"<br>
+                                • "person without helmet"<br>
+                                • "blue truck after that"
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -212,7 +226,18 @@
                         <span></span><span></span><span></span>
                     </div>
                 </div>
+                <!-- Inline upload progress (hidden until file chosen) -->
+                <div id="chat-upload-progress" class="chat-upload-progress hidden">
+                    <div class="cup-bar-wrap"><div id="cup-bar" class="cup-bar"></div></div>
+                    <span id="cup-label" class="cup-label">Uploading...</span>
+                </div>
+
                 <div class="chat-input-bar">
+                    <!-- Attach / upload button -->
+                    <label id="chat-attach-label" class="chat-attach-btn" title="Upload video">
+                        <input type="file" id="chat-file-input" accept="video/mp4,video/x-m4v,video/*" style="display:none;">
+                        <span>⇪</span>
+                    </label>
                     <input type="text" id="chat-input" placeholder="Ask in English, Hindi, or Kannada... ✦" autocomplete="off">
                     <button id="chat-send-btn">
                         <span class="send-icon">➤</span>
@@ -220,6 +245,7 @@
                 </div>
             </div>
         </section>
+
 
     </main>
 

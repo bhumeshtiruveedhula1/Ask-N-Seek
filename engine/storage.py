@@ -24,7 +24,10 @@ _PROJECT_ROOT = os.path.dirname(_ENGINE_DIR)
 DB_PATH = os.path.join(_PROJECT_ROOT, "asknseek.db")
 
 # ---------------------------------------------------------------------------
-# Color family expansion (mirrors search.py logic — keep in sync)
+# Color family expansion — maps canonical query color → all DB color values that should match.
+# CRITICAL: these values MUST match what color_extractor.py's CIELAB palette stores.
+# DB audit shows white/silver cars are stored as 'silver' or 'light gray' (L>=75 achromatic),
+# and dark cars stored as 'black' or 'dark gray'.
 # ---------------------------------------------------------------------------
 _COLOR_FAMILIES: dict[str, list[str]] = {
     "blue":   ["blue", "dark blue", "light blue", "navy"],
@@ -33,12 +36,32 @@ _COLOR_FAMILIES: dict[str, list[str]] = {
     "yellow": ["yellow", "dark yellow", "gold"],
     "purple": ["purple", "pink", "hot pink"],
     "gray":   ["gray", "light gray", "dark gray", "charcoal"],
-    "black":  ["black"],
-    "white":  ["white"],
+    # white cars → CIELAB stores as 'silver' (L~80) or 'light gray' (L~75)
+    "white":  ["white", "silver", "light gray"],
+    # black cars → CIELAB stores as 'black' (L~10) or 'dark gray' (L~35)
+    "black":  ["black", "dark gray"],
     "orange": ["orange", "orange-red"],
     "brown":  ["brown", "beige", "tan"],
-    "silver": ["silver"],
-    "gold":   ["gold"],
+    # silver is its own family but overlaps with white/light gray
+    "silver": ["silver", "light gray", "white"],
+    "gold":   ["gold", "yellow"],
+}
+
+# ---------------------------------------------------------------------------
+# Class family expansion — maps broad user-query class → all YOLO sub-labels.
+# CRITICAL: YOLO-World detects 'sedan','minivan','jeep' NOT just 'car'.
+# When user says "white car", class filter must also cover sedan/minivan etc.
+# ---------------------------------------------------------------------------
+_CLASS_FAMILIES: dict[str, list[str]] = {
+    "car":        ["car", "sedan", "minivan", "suv", "jeep", "pickup",
+                   "hatchback", "van", "coupe", "auto", "vehicle", "automobile"],
+    "truck":      ["truck", "pickup", "lorry", "van", "cargo"],
+    "bus":        ["bus", "minibus", "coach"],
+    "motorcycle": ["motorcycle", "motorbike", "scooter", "bike"],
+    "bicycle":    ["bicycle", "bike", "cycle"],
+    "person":     ["person", "man", "woman", "child", "boy", "girl",
+                   "pedestrian", "human", "people", "guard", "officer",
+                   "worker", "warden", "suspect", "intruder"],
 }
 
 
@@ -69,9 +92,10 @@ def init_db() -> None:
             scene_id          INTEGER DEFAULT 0,
             frame_index       INTEGER DEFAULT 0,
             class_name        TEXT NOT NULL,
-            color             TEXT,
+            color             TEXT DEFAULT '',
             confidence        REAL DEFAULT 0.0,
             bbox              TEXT DEFAULT '[]',
+            bbox_area         REAL DEFAULT 0.0,
             spatial_relations TEXT DEFAULT '[]'
         )
     """)
@@ -80,8 +104,14 @@ def init_db() -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_color    ON detections(color)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_video    ON detections(video_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ts       ON detections(timestamp)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_frame    ON detections(video_id, frame_index)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_cls_col  ON detections(class_name, color)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_frame ON detections(video_id, frame_index)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_class  ON detections(video_id, class_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_conf   ON detections(confidence)")
+    # Safe migration: add bbox_area column if missing (ALTER TABLE ADD COLUMN is idempotent with try/except)
+    try:
+        conn.execute("ALTER TABLE detections ADD COLUMN bbox_area REAL DEFAULT 0.0")
+    except Exception:
+        pass  # column already exists
     conn.commit()
     conn.close()
     logger.debug("SQLite DB initialised at %s", DB_PATH)
@@ -179,8 +209,11 @@ def search_detections(
         params.append(video_id)
 
     if class_name:
-        sql += " AND class_name = ?"
-        params.append(class_name)
+        # Expand broad class to all YOLO sub-labels (e.g. 'car' → sedan, minivan...)
+        cls_family = _CLASS_FAMILIES.get(class_name, [class_name])
+        placeholders_c = ",".join("?" * len(cls_family))
+        sql += f" AND class_name IN ({placeholders_c})"
+        params.extend(cls_family)
 
     if color:
         family = _COLOR_FAMILIES.get(color, [color])
@@ -200,15 +233,31 @@ def search_detections(
             )
             params.append(neg_cls)
 
+    # Confidence floor: ignore very low-confidence background detections
+    sql += " AND confidence >= 0.30"
     sql += " ORDER BY confidence DESC LIMIT ?"
     params.append(limit)
 
     rows = conn.execute(sql, params).fetchall()
     conn.close()
 
-    results = []
+    # ── NMS Frame-level deduplication ─────────────────────────────────────
+    # Keep only the highest-confidence detection per (video_id, frame_index, class_name).
+    # This prevents double-counting overlapping bounding boxes of the same object
+    # detected multiple times in the same frame.
+    seen_frame_cls: dict = {}
     for row in rows:
         r = dict(row)
+        key = (r.get("video_id", ""), r.get("frame_index", 0), r.get("class_name", ""))
+        if key not in seen_frame_cls or r["confidence"] > seen_frame_cls[key]["confidence"]:
+            seen_frame_cls[key] = r
+    deduped_rows = list(seen_frame_cls.values())
+    # Re-sort by confidence after dedup
+    deduped_rows.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+
+    results = []
+    for row in deduped_rows:
+        r = dict(row) if not isinstance(row, dict) else row
         # Deserialize JSON blobs
         r["bbox"] = json.loads(r["bbox"]) if r.get("bbox") else []
         r["spatial_relations"] = (

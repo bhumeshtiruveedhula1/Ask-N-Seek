@@ -315,7 +315,7 @@ def _serialize_score_breakdown(sb) -> Optional[dict]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 60)
-    logger.info("  Ask-N-Seek Bridge Server v2.4")
+    logger.info("  Garuda Gamana Bridge Server v3.0")
     logger.info("  Mode: %s", "MOCK" if _MOCK_MODE else "CONNECTED")
     logger.info("  Backend path: %s", BACKEND_PATH)
     logger.info("=" * 60)
@@ -324,9 +324,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Ask-N-Seek Bridge v2.4",
+    title="Garuda Gamana Bridge v3.0",
     description="REST API connecting the HTML frontend to the real backend pipeline",
-    version="2.4.0",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -634,28 +634,36 @@ async def serve_video(filename: str):
     """
     from fastapi.responses import FileResponse
 
-    # ── 1. Check all active jobs for the original uploaded path (TASK 3) ──
-    filename_stem = os.path.splitext(os.path.basename(filename))[0].lower()
+    # NOTE: video_id may contain spaces and dots (e.g. "WhatsApp Video 2026-08-05 at 5.16.45 PM (1)").
+    # os.path.splitext() would incorrectly split on the first dot, giving wrong stems.
+    # Since video_ids NEVER have extensions, use the full filename as the match key.
+    #
+    # Matching strategy (case-insensitive):
+    #   exact_key  = full filename lowercased (e.g. "whatsapp video 2026-08-05 at 5.16.45 pm (1)")
+    #   file_stem  = os.path.splitext(file)[0].lower()  (strip ONLY the actual .mp4/.mov extension)
+    exact_key = filename.lower().strip()
+
+    # ── 1. Check all active jobs for the original uploaded path ────────────
     with _jobs_lock:
         jobs_snapshot = list(_ingest_jobs.values())
 
     for job in jobs_snapshot:
         orig = job.get("_original_video_path")
         if orig and os.path.isfile(orig):
-            orig_stem = os.path.splitext(os.path.basename(orig))[0].lower()
-            # Match if: filename exactly matches OR stems match
-            if os.path.basename(orig) == filename or orig_stem == filename_stem:
+            orig_name = os.path.basename(orig)
+            orig_stem = os.path.splitext(orig_name)[0].lower()   # strip actual ext
+            if orig_name.lower() == exact_key or orig_stem == exact_key:
                 logger.info("Serving video from job path: %s", orig)
-                ext = os.path.splitext(orig)[1].lower()
+                ext  = os.path.splitext(orig)[1].lower()
                 mime = _VIDEO_MIME.get(ext, "video/mp4")
-                return FileResponse(
-                    orig,
-                    media_type=mime,
-                    headers={"Accept-Ranges": "bytes"},
-                )
+                return FileResponse(orig, media_type=mime, headers={
+                    "Accept-Ranges": "bytes",
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                })
 
-    # ── 2-6. Fallback: search known directories ──
-    # Build VIDEO_SEARCH_PATHS from env (colon or semicolon separated)
+    # ── 2. Search known directories ────────────────────────────────────────
     env_paths: list[str] = []
     raw_env = os.environ.get("VIDEO_SEARCH_PATHS", "")
     if raw_env:
@@ -663,6 +671,7 @@ async def serve_video(filename: str):
         env_paths = [p.strip() for p in _re.split(r"[;:]", raw_env) if p.strip()]
 
     search_dirs = [
+        os.path.join(BACKEND_PATH, "videos"),       # persistent library (highest priority)
         os.path.join(BACKEND_PATH, "temp_frames"),
         BACKEND_PATH,
         os.path.join(BACKEND_PATH, "outputs"),
@@ -670,48 +679,36 @@ async def serve_video(filename: str):
         *env_paths,
     ]
 
-    # Detect MIME from requested filename extension
-    req_ext = os.path.splitext(filename)[1].lower()
-    mime = _VIDEO_MIME.get(req_ext, None) or mimetypes.guess_type(filename)[0] or "video/mp4"
+    mime_default = mimetypes.guess_type(filename + ".mp4")[0] or "video/mp4"
 
-    # Try exact match first, then stem-only match (handles mp4/mov differences)
-    for d in search_dirs:
-        # Exact match
-        candidate = os.path.join(d, filename)
-        if os.path.isfile(candidate):
-            logger.info("Serving video (exact): %s", candidate)
-            c_ext = os.path.splitext(candidate)[1].lower()
-            c_mime = _VIDEO_MIME.get(c_ext, mime)
-            return FileResponse(
-                candidate,
-                media_type=c_mime,
-                headers={"Accept-Ranges": "bytes"},
-            )
-
-    # Stem-only match in each directory (allows video_id without extension)
     for d in search_dirs:
         if not os.path.isdir(d):
             continue
         try:
             for entry in os.scandir(d):
-                if entry.is_file():
-                    entry_stem = os.path.splitext(entry.name)[0].lower()
-                    if entry_stem == filename_stem:
-                        logger.info("Serving video (stem match): %s", entry.path)
-                        c_ext = os.path.splitext(entry.name)[1].lower()
-                        c_mime = _VIDEO_MIME.get(c_ext, mime)
-                        return FileResponse(
-                            entry.path,
-                            media_type=c_mime,
-                            headers={"Accept-Ranges": "bytes"},
-                        )
+                if not entry.is_file():
+                    continue
+                # Strip the REAL extension (.mp4 / .mov etc.) from the stored file
+                file_stem = os.path.splitext(entry.name)[0].lower()
+                file_name = entry.name.lower()
+                # Match if the requested video_id equals the file stem OR the full filename
+                if file_stem == exact_key or file_name == exact_key:
+                    logger.info("Serving video (match): %s", entry.path)
+                    c_ext  = os.path.splitext(entry.name)[1].lower()
+                    c_mime = _VIDEO_MIME.get(c_ext, mime_default)
+                    return FileResponse(entry.path, media_type=c_mime, headers={
+                        "Accept-Ranges": "bytes",
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0",
+                    })
         except PermissionError:
             continue
 
     logger.warning("Video not found: '%s' | searched: %s", filename, search_dirs)
     return JSONResponse(
         status_code=404,
-        content={"error": f"Video file not found", "requested": filename},
+        content={"error": "Video file not found", "requested": filename},
     )
 
 
@@ -730,6 +727,210 @@ def list_collections():
         }
     except Exception as exc:
         return {"error": str(exc)}
+
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CHAT  --  Stateful Chat Engine
+# Exposes BOTH /chat (app.js compat) and /api/chat (clean REST path)
+# ═══════════════════════════════════════════════════════════════════
+
+class ChatRequest(BaseModel):
+    """
+    Payload sent by the frontend chat UI.
+    Both the vexed app.js and any REST client use this shape.
+    """
+    text:         str                # raw user message (may be structured like "color: Red")
+    video_id:     Optional[str] = None   # collection_name / active video
+    display_text: Optional[str] = None  # user-visible label (e.g. "Red") used in XAI heading
+
+
+def _handle_chat(req: ChatRequest) -> dict:
+    """
+    Shared handler for /chat and /api/chat.
+    Routes to chat_engine.process_chat() when the backend is available,
+    falls back to a polite mock reply in MOCK_MODE.
+    """
+    msg      = (req.text or "").strip()
+    video_id = req.video_id or _active_video_id or ""
+
+    # Determine whether a video has been ingested (needed for Phase B gate)
+    is_video_uploaded = bool(video_id)
+
+    # ── MOCK fallback ─────────────────────────────────────────────────────
+    if _MOCK_MODE or not _backend_available:
+        return {
+            "reply":                  (
+                "I'm currently running in mock mode (no backend connected). "
+                "Start the server with the real backend to enable AI search."
+            ),
+            "results":                [],
+            "language_detected":      "en",
+            "session_id":             video_id,
+            "filters_used":           {},
+            "awaiting_clarification": False,
+        }
+
+    # ── Real backend path ─────────────────────────────────────────────────
+    try:
+        from engine.chat_engine import process_chat
+        return process_chat(
+            session_id        = video_id,
+            message           = msg,
+            is_video_uploaded = is_video_uploaded,
+            display_text      = req.display_text,
+        )
+    except Exception as exc:
+        logger.exception("chat endpoint error: %s", exc)
+        return {
+            "reply":                  f"Chat engine error: {exc}. Please try again.",
+            "results":                [],
+            "language_detected":      "en",
+            "session_id":             video_id,
+            "filters_used":           {},
+            "awaiting_clarification": False,
+        }
+
+
+@app.post("/chat")
+async def chat_endpoint(req: ChatRequest):
+    """
+    /chat  --  backward-compatible route (used by frontend_vexed/app.js).
+    Accepts {text, video_id}, returns {reply, results, language_detected, ...}.
+    """
+    return _handle_chat(req)
+
+
+@app.post("/api/chat")
+async def api_chat_endpoint(req: ChatRequest):
+    """
+    /api/chat  --  clean REST path for external tooling or future mobile clients.
+    Identical handler to /chat.
+    """
+    return _handle_chat(req)
+
+
+@app.delete("/chat/session/{session_id}")
+async def clear_chat_session(session_id: str):
+    """
+    Clear the conversation memory for a given session (video).
+    Useful when the user uploads a new video and wants a fresh context.
+    """
+    try:
+        from engine.session_db import clear_session
+        clear_session(session_id)
+        return {"status": "ok", "message": f"Session {session_id} cleared."}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# VIDEOS LIBRARY  (persistent folder for pre-stored videos)
+# ═══════════════════════════════════════════════════════════════════
+_VIDEOS_DIR = os.path.join(BACKEND_PATH, "videos")
+os.makedirs(_VIDEOS_DIR, exist_ok=True)  # auto-create on startup
+
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+
+
+@app.get("/videos/list")
+async def list_library_videos():
+    """
+    Return all video files in fresh_clone/videos/ as a JSON list.
+    Each entry: {name, video_id, size_mb, already_ingested}
+    """
+    videos_out = []
+    try:
+        for fname in sorted(os.listdir(_VIDEOS_DIR)):
+            if fname.startswith("."):
+                continue  # skip .gitkeep etc.
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in _VIDEO_EXTENSIONS:
+                continue
+            fpath    = os.path.join(_VIDEOS_DIR, fname)
+            size_mb  = round(os.path.getsize(fpath) / (1024 * 1024), 1)
+            vid_id   = os.path.splitext(fname)[0]  # stem = video_id
+            # Check if already ingested in SQLite
+            ingested = False
+            if _backend_available:
+                try:
+                    counts = get_class_counts(vid_id)
+                    ingested = len(counts) > 0
+                except Exception:
+                    pass
+            videos_out.append({
+                "name":             fname,
+                "video_id":         vid_id,
+                "size_mb":          size_mb,
+                "already_ingested": ingested,
+            })
+    except Exception as exc:
+        logger.warning("list_library_videos error: %s", exc)
+    return {"videos": videos_out}
+
+
+class VideoSelectRequest(BaseModel):
+    video_id: str
+
+
+@app.post("/videos/select")
+async def select_library_video(req: VideoSelectRequest):
+    """
+    Set a library video as the active video.
+    If already ingested → instant switch (no re-ingest).
+    If not ingested → triggers ingestion job in background.
+    Returns: {status, video_id, ingested, job_id?}
+    """
+    global _active_video_id
+    vid_id = req.video_id.strip()
+
+    # Find the file in the library
+    target_path: str | None = None
+    for fname in os.listdir(_VIDEOS_DIR):
+        stem = os.path.splitext(fname)[0]
+        if stem == vid_id:
+            target_path = os.path.join(_VIDEOS_DIR, fname)
+            break
+
+    if not target_path or not os.path.isfile(target_path):
+        return {"status": "error", "message": f"Video '{vid_id}' not found in library."}
+
+    # Check if already ingested
+    already_ingested = False
+    if _backend_available:
+        try:
+            counts = get_class_counts(vid_id)
+            already_ingested = len(counts) > 0
+        except Exception:
+            pass
+
+    if already_ingested:
+        # Instant switch — just set active video
+        _active_video_id = vid_id
+        logger.info("Library video selected (already ingested): %s", vid_id)
+        return {"status": "ok", "video_id": vid_id, "ingested": True}
+
+    # Not yet ingested — start background ingestion
+    job_id = str(uuid.uuid4())[:8]
+    with _jobs_lock:
+        _ingest_jobs[job_id] = {
+            "status":                 "queued",
+            "progress":               0,
+            "phase":                  "queued",
+            "video_id":               vid_id,
+            "collection_name":        None,
+            "_original_video_path":   target_path,
+            "_start_time":            time.monotonic(),
+        }
+    thread = threading.Thread(
+        target=_run_ingestion_job,
+        args=(job_id, target_path),
+        daemon=True,
+    )
+    thread.start()
+    logger.info("Library video ingestion started: %s (job %s)", vid_id, job_id)
+    return {"status": "ingesting", "video_id": vid_id, "job_id": job_id, "ingested": False}
+
 
 
 # ═══════════════════════════════════════════════════════════════════

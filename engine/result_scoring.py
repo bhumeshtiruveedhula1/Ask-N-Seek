@@ -139,14 +139,19 @@ def _score_object(objs: list[dict], filters: dict) -> tuple[int, str]:
 def _score_color(objs: list[dict], filters: dict) -> tuple[int, str]:
     """
     Color score (0-20).
-    Uses same color-family expansion as search.py so "dark blue" scores for query "blue".
+
+    STRICT CLASS BINDING: color score is only computed for objects whose
+    class_name matches the requested class. This prevents a "white hoodie"
+    from scoring points when the user searched for a "white laptop".
+
+    Uses same color-family expansion as storage.py.
     """
     color_filter: str | None = filters.get("color")
 
     if not color_filter:
         return 0, "no color constraint"
 
-    # Mirror the families in search.py — keep both in sync if you update one
+    # MUST stay in sync with storage.py _COLOR_FAMILIES
     _COLOR_FAMILIES: dict[str, list[str]] = {
         "blue":   ["blue", "dark blue", "light blue", "navy"],
         "red":    ["red", "dark red", "orange-red"],
@@ -154,23 +159,39 @@ def _score_color(objs: list[dict], filters: dict) -> tuple[int, str]:
         "yellow": ["yellow", "dark yellow", "gold"],
         "purple": ["purple", "pink", "hot pink"],
         "gray":   ["gray", "light gray", "dark gray", "charcoal"],
-        "black":  ["black"],
-        "white":  ["white"],
+        "black":  ["black", "dark gray"],       # dark gray → black family
+        "white":  ["white", "silver", "light gray"],  # silver/light gray → white family
         "orange": ["orange", "orange-red"],
         "brown":  ["brown", "beige", "tan"],
-        "silver": ["silver"],
-        "gold":   ["gold"],
+        "silver": ["silver", "light gray", "white"],
+        "gold":   ["gold", "yellow"],
     }
     family = set(_COLOR_FAMILIES.get(color_filter, [color_filter]))
 
-    matched_color = sum(1 for o in objs if o.get(_QO) in family)
-    total = len(objs)
+    # Strict class binding: only score color on the requested class's objects
+    class_filter: str | None = filters.get("class")
+    if class_filter:
+        # Import class families to expand (e.g. 'car' → sedan, minivan...)
+        try:
+            from engine.storage import _CLASS_FAMILIES
+            cls_family = set(_CLASS_FAMILIES.get(class_filter, [class_filter]))
+        except ImportError:
+            cls_family = {class_filter}
+        target_objs = [o for o in objs if o.get(_QC, "").lower() in cls_family]
+    else:
+        target_objs = objs
+
+    if not target_objs:
+        return 0, f"no {class_filter or 'any'} objects to check color on"
+
+    matched_color = sum(1 for o in target_objs if o.get(_QO, "").lower() in family)
+    total = len(target_objs)
     ratio = matched_color / total if total else 0
     score = round(ratio * 20)
 
     if matched_color > 0:
-        return score, f"{color_filter} color confirmed ({matched_color}/{total})"
-    return 0, f"color mismatch — expected {color_filter}, got {set(o.get(_QO) for o in objs)}"
+        return score, f"{color_filter} color confirmed on {class_filter or 'objects'} ({matched_color}/{total})"
+    return 0, f"color mismatch on {class_filter} — expected {color_filter}, got {set(o.get(_QO,'') for o in target_objs)}"
 
 
 
