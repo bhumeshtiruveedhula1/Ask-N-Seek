@@ -181,6 +181,21 @@ def extract_color(
         if crop is None or crop.size == 0:
             return "unknown"
 
+        # ── Conditional Gray World white balance ─────────────────────────────
+        # Removes sodium-lamp / fluorescent yellow-green illuminant cast (CCTV).
+        # SKIP when one channel dominates strongly (max_spread > 40): a red fire
+        # extinguisher has mean_R >> mean_G,B — GW would wash it out to pink.
+        _b_m = crop[:, :, 0].astype(np.float32).mean()
+        _g_m = crop[:, :, 1].astype(np.float32).mean()
+        _r_m = crop[:, :, 2].astype(np.float32).mean()
+        if max(_b_m, _g_m, _r_m) - min(_b_m, _g_m, _r_m) < 40:
+            global_mean = (_b_m + _g_m + _r_m) / 3.0
+            b_ch = np.clip(crop[:, :, 0].astype(np.float32) * (global_mean / (_b_m + 1e-6)), 0, 255)
+            g_ch = np.clip(crop[:, :, 1].astype(np.float32) * (global_mean / (_g_m + 1e-6)), 0, 255)
+            r_ch = np.clip(crop[:, :, 2].astype(np.float32) * (global_mean / (_r_m + 1e-6)), 0, 255)
+            crop = np.stack([b_ch, g_ch, r_ch], axis=2).astype(np.uint8)
+        # else: strong hue present — skip GW to preserve actual object color
+
         # Downsample to 32x32 before k-means — ~100x faster, perceptually fine
         crop_resized = cv2.resize(crop, (32, 32), interpolation=cv2.INTER_AREA)
 
@@ -198,12 +213,12 @@ def extract_color(
         valid_mask = (
             (l_scaled > 20) &
             (l_scaled < 95) &
-            (np.abs(a_center) + np.abs(b_center) > 15)
+            (np.abs(a_center) + np.abs(b_center) > 8)   # was 15 — too aggressive for CCTV compressed colors
         )
         valid_bgr_px = crop_resized.reshape(-1, 3)[valid_mask].astype(np.float32)
 
         # Fallback: if outlier rejection removed too many pixels, use all
-        pixels = valid_bgr_px if len(valid_bgr_px) >= 10 else crop_resized.reshape(-1, 3).astype(np.float32)
+        pixels = valid_bgr_px if len(valid_bgr_px) >= 5 else crop_resized.reshape(-1, 3).astype(np.float32)
 
         # ---- k-means on surviving pixels -----------------------------------
         n_pixels = len(pixels)

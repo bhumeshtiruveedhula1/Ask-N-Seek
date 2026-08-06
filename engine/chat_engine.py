@@ -87,6 +87,18 @@ _PERSON_CLASSES = {
     "thief", "suspect", "intruder", "individual",
 }
 
+# Derived from storage._CLASS_FAMILIES — stays in sync automatically.
+# This is the full set of classes the chatbot NLP will recognize.
+from engine.storage import _CLASS_FAMILIES as _CF
+_ALL_KNOWN_CLASSES: set[str] = set(_CF.keys())
+
+# Office / building objects — get context-aware clarification card
+_OFFICE_OBJECTS: set[str] = {
+    "chair", "bench", "table", "bottle", "bin", "trash", "bucket",
+    "fan", "speaker", "curtain", "window", "stage", "bag", "phone",
+    "laptop", "extinguisher", "fire extinguisher", "desk",
+}
+
 # Spatial trigger words -> relation type stored in DB
 _SPATIAL_TRIGGERS: dict[str, str] = {
     "next to":     "near",  "near":        "near",  "beside":   "near",
@@ -267,11 +279,12 @@ def _extract_entities(message: str) -> dict[str, Any]:
 
     # ── C. Negation (without X, no X, not X) ──────────────────────────────
     neg_pattern = re.compile(
-        r"\b(?:without|no|not|excluding|minus|except)\s+(?:a\s+|an\s+|the\s+)?(\w+)"
+        r"\b(?:without|no|not|excluding|minus|except)\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)"
     )
     for m in neg_pattern.finditer(msg_lower):
-        neg_word = m.group(1).rstrip("s")
-        if neg_word in (_VEHICLE_CLASSES | {"helmet", "bag", "backpack", "badge", "vest"}):
+        neg_word = m.group(1).strip().rstrip("s")
+        if neg_word in (_VEHICLE_CLASSES | _PERSON_CLASSES | _ALL_KNOWN_CLASSES
+                        | {"helmet", "bag", "backpack", "badge", "vest"}):
             entities["negated"].append(neg_word)
 
     # ── D. Spatial relation (longest phrase first) ─────────────────────────
@@ -301,7 +314,13 @@ def _extract_entities(message: str) -> dict[str, Any]:
 
     # ── E. Primary class via spaCy ────────────────────────────────────────
     nlp = _get_nlp()
-    all_known = _VEHICLE_CLASSES | _PERSON_CLASSES | {"helmet", "bag", "backpack", "badge"}
+    # all_known = everything the chatbot can recognize as a searchable class.
+    # Must include ALL _CLASS_FAMILIES keys + common YOLO nouns so that
+    # 'chair', 'bottle', 'fan', 'extinguisher' etc. are not silently ignored.
+    all_known = (
+        _VEHICLE_CLASSES | _PERSON_CLASSES | _ALL_KNOWN_CLASSES
+        | {"helmet", "bag", "backpack", "badge", "vest", "laptop", "phone"}
+    )
     found_nouns: list[str] = []
 
     if nlp:
@@ -356,9 +375,9 @@ def _extract_entities(message: str) -> dict[str, Any]:
             else:
                 entities["class"] = found_nouns[0] if found_nouns else None
         elif entities["color"]:
-            # Color found: look for a vehicle/object noun to attach to
-            vehicle_nouns = [n for n in found_nouns if n in _VEHICLE_CLASSES]
-            entities["class"] = vehicle_nouns[0] if vehicle_nouns else (found_nouns[0] if found_nouns else None)
+            # Color found: pick any recognized noun (vehicle OR office object OR person)
+            # No vehicle bias — if user said 'red chair', chair should win
+            entities["class"] = found_nouns[0] if found_nouns else None
         else:
             entities["class"] = found_nouns[0] if found_nouns else None
     else:
@@ -374,6 +393,20 @@ def _extract_entities(message: str) -> dict[str, Any]:
                 break
         entities["raw_nouns"] = found_nouns
         entities["class"]     = found_nouns[0] if found_nouns else None
+
+    # ── F. Multi-word noun fallback ───────────────────────────────────────────
+    # spaCy sometimes misses multi-word objects (e.g. "fire extinguisher" is
+    # split into "fire" + "extinguisher"; "fire" may be tagged ADJ not NOUN).
+    # Scan known multi-word class keys directly in the message string.
+    if not entities.get("class"):
+        multi_word_keys = sorted(
+            [k for k in _ALL_KNOWN_CLASSES if " " in k],
+            key=len, reverse=True  # longest first
+        )
+        for phrase in multi_word_keys:
+            if phrase in msg_lower:
+                entities["class"] = phrase
+                break
 
     return entities
 
@@ -606,6 +639,11 @@ def process_chat(
             questions = [
                 {"id": "color",   "label": "Vehicle color?",    "options": ["Red", "Blue", "White", "Silver", "Black", "Gray", "Any color"]},
                 {"id": "spatial", "label": "Near a person?",    "options": ["Yes — near person", "No — alone", "Skip"]},
+            ]
+        elif noun in _OFFICE_OBJECTS:
+            questions = [
+                {"id": "color",   "label": "Object color?",     "options": ["Red", "Blue", "White", "Gray", "Black", "Any color"]},
+                {"id": "spatial", "label": "Near a person?",    "options": ["Yes — near person", "Skip"]},
             ]
         else:
             questions = [

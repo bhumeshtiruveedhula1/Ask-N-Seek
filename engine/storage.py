@@ -93,9 +93,10 @@ _CLASS_FAMILIES: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    # check_same_thread=False: FastAPI dispatches requests across threads.
+    # WAL mode: concurrent reads don't block writes.
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    # Enable WAL mode for better concurrent read performance
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
@@ -205,6 +206,7 @@ def search_detections(
     negated_classes: Optional[List[str]] = None,
     video_id: Optional[str] = None,
     limit: int = 500,
+    spatial_relation: Optional[Dict[str, Any]] = None,  # passed-through; used by search.py spatial filter
 ) -> List[Dict[str, Any]]:
     """
     Search detections with structured filters.
@@ -239,10 +241,13 @@ def search_detections(
         params.extend(cls_family)
 
     if color:
-        family = _COLOR_FAMILIES.get(color, [color])
-        placeholders = ",".join("?" * len(family))
-        sql += f" AND color IN ({placeholders})"
-        params.extend(family)
+        # Normalize case: 'Blue' -> 'blue', skip non-color values
+        color_key = color.strip().lower()
+        if color_key not in ('any color', 'any', 'skip', 'unknown', ''):
+            family = _COLOR_FAMILIES.get(color_key, [color_key])
+            placeholders = ",".join("?" * len(family))
+            sql += f" AND color IN ({placeholders})"
+            params.extend(family)
 
     # Negation: exclude frames (video_id + frame_index) that contain the
     # negated class anywhere in that frame — not just among the filtered rows.
