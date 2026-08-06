@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ask-N-Seek | Video Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- ══════════════════════════════════════════════════
+         BRIDGE STATUS BAR  (ported from frontend/)
+         ═════════════════════════════════════════════════ -->
+    <div id="bridgeStatusBar" class="bridge-status-bar">
+        <span id="globalBridgeDot" class="bridge-dot"></span>
+        <span id="globalBridgeText" class="bridge-text">Connecting to backend...</span>
+    </div>
+
+    <canvas id="particle-canvas"></canvas>
+
+    <main class="container">
+
+        <!-- Logo Header -->
+        <header class="app-header reveal">
+            <div class="logo-box">
+                <span class="logo-icon">✧</span>
+                <span class="logo-text">Ask<span class="logo-highlight">N</span>Seek</span>
+            </div>
+        </header>
+
+        <!-- Navigation Bar -->
+        <nav class="main-nav reveal" style="transition-delay: 0.05s;">
+            <button class="nav-btn active" data-target="dashboard">Dashboard</button>
+            <button class="nav-btn" data-target="upload">Upload</button>
+            <button class="nav-btn" data-target="results">Results</button>
+        </nav>
+
+        <!-- Hero Section -->
+        <section id="hero" class="reveal" style="transition-delay: 0.1s;">
+            <h1 class="headline">Type what happened. <br>We'll show you exactly where — and prove it.</h1>
+            <p class="subheadline">Upload your footage and search using natural language.</p>
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             UPLOAD ZONE  (enhanced with 6-phase progress)
+             ═════════════════════════════════════════════ -->
+        <section id="upload-section" class="reveal">
+            <div id="uploadZone" class="drop-zone">
+                <div class="drop-zone-content">
+                    <span class="upload-icon">⇪</span>
+                    <p>Drag and drop a video file, or <span class="browse-btn">browse</span></p>
+                    <p class="upload-hint">MP4, AVI, MOV, MKV · Max 3 minutes</p>
+                    <input type="file" id="fileInput" accept="video/mp4,video/x-m4v,video/*">
+                </div>
+            </div>
+
+            <div id="ingest-status" class="hidden">
+                <!-- Meta bar: pct / phase / elapsed -->
+                <div id="ingestMetaBar" class="ingest-meta-bar" style="display:none;">
+                    <span id="ingestPct" class="ingest-pct">0%</span>
+                    <span id="ingestPhaseLabel" class="ingest-phase-label">Queued</span>
+                    <span id="ingestElapsed" class="ingest-elapsed">Elapsed: 0:00</span>
+                </div>
+
+                <!-- Main progress bar -->
+                <div class="progress-container">
+                    <div id="progressFill" class="progress-bar" style="width:0%"></div>
+                </div>
+
+                <!-- 6-phase indicators -->
+                <div class="progress-phases" id="progressPhases">
+                    <div class="phase" data-phase="0"><span class="phase-dot"></span><span class="phase-name">Scene Detection</span></div>
+                    <div class="phase" data-phase="1"><span class="phase-dot"></span><span class="phase-name">Keyframes</span></div>
+                    <div class="phase" data-phase="2"><span class="phase-dot"></span><span class="phase-name">YOLO Detection</span></div>
+                    <div class="phase" data-phase="3"><span class="phase-dot"></span><span class="phase-name">Color Extraction</span></div>
+                    <div class="phase" data-phase="4"><span class="phase-dot"></span><span class="phase-name">Spatial Relations</span></div>
+                    <div class="phase" data-phase="5"><span class="phase-dot"></span><span class="phase-name">Indexing</span></div>
+                </div>
+
+                <!-- Progress log -->
+                <div class="progress-log" id="progressLog"></div>
+
+                <!-- Ingest stats -->
+                <div id="ingestStats" class="ingest-stats" style="display:none;"></div>
+
+                <!-- Top objects revealed on completion -->
+                <div id="topObjectsSection" class="top-objects-section" style="display:none;">
+                    <div class="top-objects-title">Discovered Objects</div>
+                    <div id="topObjectsGrid" class="top-objects-grid"></div>
+                </div>
+            </div>
+
+            <!-- Collection badge shown after ingestion -->
+            <div id="collectionBadge" class="collection-badge" style="display:none;">
+                <div class="collection-ready-dot"></div>
+                <div>
+                    <div class="collection-label">Active Collection</div>
+                    <div id="collectionName" class="collection-name"></div>
+                </div>
+                <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+                    <span id="bridgeStatusDot" class="bridge-dot" style="width:6px;height:6px;"></span>
+                    <span id="bridgeStatusText" style="font-family:var(--font-mono);font-size:0.65rem;color:rgba(248,248,255,0.5);">Ready</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             SEARCH  (+ scenario presets + vocab warnings)
+             ═════════════════════════════════════════════ -->
+        <section id="search-section" class="reveal hidden">
+            <h2 class="section-title">Query the Footage</h2>
+
+            <!-- Scenario presets (from /scenarios API) -->
+            <div id="scenarioPresets" class="scenario-presets" style="display:none;">
+                <div class="presets-label">Investigation Scenarios</div>
+                <div id="presetsGrid" class="presets-grid"></div>
+            </div>
+
+            <!-- Quick chips (top detected objects) -->
+            <div id="quickChips" class="quick-chips" style="display:none;"></div>
+
+            <!-- Preset query buttons (static fallbacks) -->
+            <div class="preset-queries" id="staticPresets">
+                <button class="preset-btn" data-query="show me all vehicles">Any vehicles?</button>
+                <button class="preset-btn" data-query="person without a helmet">Safety violations?</button>
+                <button class="preset-btn" data-query="red car left of the truck">Specific relations?</button>
+            </div>
+
+            <!-- Search box -->
+            <div class="search-box">
+                <input type="text" id="queryInput" placeholder="e.g., 'red frisbee' or 'person wearing no hat'">
+                <button id="searchBtn">Search</button>
+            </div>
+
+            <!-- Dynamic suggestion chips -->
+            <div class="suggestions" id="suggestions-container" style="display:none;">
+                <div id="dynamic-suggestions" class="suggestions-row"></div>
+            </div>
+
+            <!-- Vocab warnings -->
+            <div class="vocab-warnings" id="vocabWarnings"></div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             RESULTS  (enhanced with video, jump list, diag)
+             ═════════════════════════════════════════════ -->
+        <section id="results-section" class="reveal hidden">
+
+            <!-- Results header -->
+            <div class="results-header" id="resultsHeader" style="display:none;">
+                <h3 class="results-count" id="resultsCount"></h3>
+                <p class="results-query" id="resultsQuery"></p>
+            </div>
+
+            <!-- Result cards grid -->
+            <div id="resultsGrid" class="jump-list"></div>
+
+            <!-- Diagnosis panel (no-match) -->
+            <div class="diagnosis-panel" id="diagnosisPanel" style="display:none;"></div>
+
+            <!-- Video player area -->
+            <div class="video-player-area" id="videoPlayerArea" style="display:none;">
+                <div class="player-header">
+                    <span class="player-label">Video Player</span>
+                    <span class="player-time" id="playerTime">00:00.00</span>
+                </div>
+                <div class="video-container">
+                    <video id="mainVideo" controls preload="metadata"></video>
+                </div>
+                <!-- Clip controls -->
+                <div id="clipControls" class="clip-controls" style="display:none;">
+                    <span class="clip-badge">6s Clip</span>
+                    <span id="clipInfo" class="clip-info"></span>
+                    <button id="playClipBtn" class="play-clip-btn">&#9654; Play Clip</button>
+                </div>
+                <!-- Result picker dropdown -->
+                <div class="result-picker">
+                    <select id="resultPicker">
+                        <option value="">Jump to result...</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Jump list: all matches -->
+            <div id="jumpListSection" style="display:none;">
+                <div class="jump-list-header">All Matches</div>
+                <div id="resultJumpList" class="result-jump-list"></div>
+            </div>
+
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             CHAT PANEL  (vexed — UNTOUCHED)
+             ═════════════════════════════════════════════ -->
+        <section id="chat-section" class="reveal hidden">
+            <h2 class="section-title">Chat with Your Footage</h2>
+            <div class="chat-container">
+                <div id="chat-messages" class="chat-messages">
+                    <div class="chat-bubble ai-bubble">
+                        <div class="bubble-avatar">✧</div>
+                        <div class="bubble-content">
+                            <p>Hey! I'm your video assistant. Ask me anything about the footage — in English, Hindi, or Kannada.</p>
+                        </div>
+                    </div>
+                </div>
+                <div id="chat-typing" class="chat-typing hidden">
+                    <div class="bubble-avatar">✧</div>
+                    <div class="typing-dots">
+                        <span></span><span></span><span></span>
+                    </div>
+                </div>
+                <div class="chat-input-bar">
+                    <input type="text" id="chat-input" placeholder="Ask in English, Hindi, or Kannada... ✦" autocomplete="off">
+                    <button id="chat-send-btn">
+                        <span class="send-icon">➤</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ══════════════════════════════════════════════
+         HISTORY SIDEBAR  (ported from frontend/)
+         ═════════════════════════════════════════════ -->
+    <div class="history-sidebar" id="historySidebar">
+        <div class="history-header">
+            <span>Session History</span>
+            <button id="closeHistory">&#10005;</button>
+        </div>
+        <div class="history-list" id="historyList"></div>
+    </div>
+    <button class="history-toggle" id="historyToggle" title="Query History">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="1 4 1 10 7 10"/>
+            <polyline points="23 20 23 14 17 14"/>
+            <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+        </svg>
+    </button>
+
+    <script src="app.js"></script>
+</body>
+</html>

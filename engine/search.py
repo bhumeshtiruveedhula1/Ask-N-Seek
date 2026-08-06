@@ -126,14 +126,65 @@ def search_structured(
         candidates_by_frame[key].append(row)
 
     # -----------------------------------------------------------------------
-    # Step 3: Apply spatial filter (object-level post-filter)
+    # Step 3: Apply spatial filter (object-level + cross-object frame check)
     # -----------------------------------------------------------------------
     if spatial:
+        from engine.storage import get_all_in_frames as _get_all_in_frames
+
+        # First collect all frame keys we need to cross-check
+        vid_to_frames: dict[str, list[int]] = defaultdict(list)
+        for (vid, fidx) in candidates_by_frame:
+            vid_to_frames[vid].append(fidx)
+
+        # Bulk-fetch ALL detections in candidate frames (not just primary class)
+        all_objects_by_frame: dict[tuple, list[dict]] = {}
+        for vid, frame_idxs in vid_to_frames.items():
+            frame_map = _get_all_in_frames(vid, frame_idxs)
+            for fidx, rows in frame_map.items():
+                all_objects_by_frame[(vid, fidx)] = rows
+
         filtered: dict[tuple, list[dict]] = {}
         for key, objs in candidates_by_frame.items():
-            matching = [o for o in objs if _has_spatial_relation(o, spatial, class_filter)]
-            if matching:
-                filtered[key] = matching
+            # Direction A: primary object itself has the spatial relation
+            direct_match = [o for o in objs if _has_spatial_relation(o, spatial, class_filter)]
+            if direct_match:
+                filtered[key] = direct_match
+                continue
+
+            # Direction B: any OTHER object in the same frame has the
+            # INVERSE spatial relation (e.g. person has 'near car' recorded on
+            # the person row, not the car row — both are symmetric for 'near').
+            all_in_frame = all_objects_by_frame.get(key, [])
+            target_cls = spatial.get("target_class", "")
+            rel_type   = spatial.get("type", "near")
+
+            # Build inverse spatial spec: look for target_class objects that
+            # have a spatial relation with class_filter (the primary class)
+            inverse_spatial = {
+                "type":         rel_type,
+                "target_class": class_filter or "",
+            }
+            cross_match = [
+                o for o in all_in_frame
+                if o.get("class_name") == target_cls
+                and _has_spatial_relation(o, inverse_spatial, target_cls)
+            ]
+            if cross_match:
+                filtered[key] = objs  # keep the original primary-class objects
+                continue
+
+            # Direction C (proximity fallback for 'near'): if the spatial type
+            # is 'near', simply require both classes to co-exist in the same frame.
+            # This handles cases where spatial_relations was not fully written for
+            # some detections (e.g. low-confidence frames at ingest time).
+            if rel_type == "near":
+                co_exists = any(
+                    o.get("class_name") == target_cls
+                    for o in all_in_frame
+                )
+                if co_exists:
+                    filtered[key] = objs
+
         candidates_by_frame = filtered
 
     if not candidates_by_frame:

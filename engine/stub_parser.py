@@ -80,17 +80,53 @@ _KNOWN_QUERIES: dict[str, dict] = {
 # Keyword dictionaries for heuristic fallback parsing
 # ---------------------------------------------------------------------------
 
-_CLASSES = {"person", "car", "dog", "bicycle", "helmet", "bag"}
-_COLORS = {"red", "blue", "white", "black", "green", "brown"}
+_CLASSES = {
+    # People
+    "person", "people", "man", "woman", "child", "pedestrian",
+    "traffic warden", "warden", "officer", "worker", "guard",
+    # Vehicles — including synonyms YOLO-World actually stores in DB
+    "car", "vehicle", "truck", "bus", "van", "motorcycle", "bicycle",
+    "sedan", "suv", "minivan", "jeep", "pickup",
+    # Objects
+    "helmet", "bag", "backpack", "handbag", "dog", "bicycle",
+    "extinguisher", "vest", "shoe", "wheel", "tire",
+}
+_COLORS = {
+    "red", "dark red",
+    "blue", "dark blue", "navy", "light blue",
+    "white", "black",
+    "green", "dark green", "light green",
+    "yellow", "gold",
+    "gray", "dark gray", "light gray", "silver",
+    "brown", "orange", "purple", "pink",
+}
 _NEGATION_WORDS = {"without", "no", "not", "excluding", "minus"}
+
+# DB only stores: near, left_of, right_of
+# All proximity phrases map to 'near'; direction phrases map to left_of/right_of
 _SPATIAL_MAP = {
-    "left of":    "left_of",
-    "left_of":    "left_of",
-    "right of":   "right_of",
-    "right_of":   "right_of",
-    "above":      "above",
-    "below":      "below",
-    "in front of": "in_front_of",
+    # Proximity — all → near (the DB proximity relation)
+    "next to":       "near",
+    "next":          "near",
+    "near":          "near",
+    "beside":        "near",
+    "by the":        "near",
+    "by":            "near",
+    "close to":      "near",
+    "adjacent to":   "near",
+    "alongside":     "near",
+    "holding":       "near",
+    "at the":        "near",
+    "touching":      "near",
+    # Direction
+    "left of":       "left_of",
+    "left_of":       "left_of",
+    "right of":      "right_of",
+    "right_of":      "right_of",
+    "above":         "above",
+    "below":         "below",
+    "in front of":   "near",
+    "behind":        "near",
 }
 _NONSENSE_SIGNALS = {
     "elephant", "dinosaur", "dragon", "flying", "invisible",
@@ -152,39 +188,63 @@ def _no_match() -> dict:
 
 def _heuristic_parse(text: str) -> dict:
     """
-    Lightweight keyword extraction — not a full parser.
-    Handles common phrase patterns so queries like
-    'show me a red person' or 'find people near a car' also work.
+    Lightweight keyword extraction with multi-word phrase awareness.
+    Handles compound colors (dark red, dark gray, navy), compound class
+    names (traffic warden), and multi-word spatial phrases (next to, close to).
     """
     tokens = text.split()
-    token_set = set(tokens)
 
-    # --- detect class ---
+    # ── Multi-word phrases to check BEFORE single-token scan ──────────────────
+    _MULTI_WORD_COLORS: list[tuple[str, str]] = [
+        # (phrase_in_query, canonical_color_for_storage_lookup)
+        ("dark red",   "red"),
+        ("dark blue",  "blue"),
+        ("dark gray",  "gray"),
+        ("dark green", "green"),
+        ("light blue", "blue"),
+        ("light gray", "gray"),
+        ("orange red", "red"),
+    ]
+    _MULTI_WORD_CLASSES: list[tuple[str, str]] = [
+        ("traffic warden", "person"),
+        ("fire extinguisher", "extinguisher"),
+    ]
+
+    # --- detect class (multi-word first, then single-token) ---
     detected_class: str | None = None
-    for tok in tokens:
-        tok_clean = tok.rstrip("s")   # "people" → "peopl", crude; handle below
-        if tok in _CLASSES:
-            detected_class = tok
+    for phrase, canonical in _MULTI_WORD_CLASSES:
+        if phrase in text:
+            detected_class = canonical
             break
-        if tok in ("people", "persons"):
-            detected_class = "person"
-            break
-        if tok_clean in _CLASSES:
-            detected_class = tok_clean
-            break
+    if not detected_class:
+        for tok in tokens:
+            tok_clean = tok.rstrip("s")
+            if tok in ("people", "persons"):
+                detected_class = "person"
+                break
+            if tok in _CLASSES:
+                detected_class = tok
+                break
+            if tok_clean in _CLASSES:
+                detected_class = tok_clean
+                break
 
-    # --- detect color ---
+    # --- detect color (multi-word first, then single-token) ---
     detected_color: str | None = None
-    for tok in tokens:
-        if tok in _COLORS:
-            detected_color = tok
+    for phrase, canonical in _MULTI_WORD_COLORS:
+        if phrase in text:
+            detected_color = canonical
             break
+    if not detected_color:
+        for tok in tokens:
+            if tok in _COLORS:
+                detected_color = tok
+                break
 
     # --- detect negation ---
     negated: list[str] = []
     for i, tok in enumerate(tokens):
         if tok in _NEGATION_WORDS:
-            # next token might be the negated class
             for j in range(i + 1, min(i + 3, len(tokens))):
                 candidate = tokens[j].rstrip("s")
                 if tokens[j] in _CLASSES:
@@ -194,15 +254,18 @@ def _heuristic_parse(text: str) -> dict:
                     negated.append(candidate)
                     break
 
-    # --- detect spatial relation ---
+    # --- detect spatial relation (longest phrase first to avoid partial match) ---
+    _STOP_WORDS = {"a", "an", "the", "some", "my", "this", "that"}
     spatial_relation: dict | None = None
-    for phrase, rel_type in _SPATIAL_MAP.items():
+    # Sort by phrase length descending so "next to" matches before "next"
+    sorted_spatial = sorted(_SPATIAL_MAP.items(), key=lambda kv: len(kv[0]), reverse=True)
+    for phrase, rel_type in sorted_spatial:
         if phrase in text:
-            # Find target class after the spatial phrase
             after = text.split(phrase, 1)[1].strip()
-            for tok in after.split():
+            after_tokens = [t for t in after.split() if t not in _STOP_WORDS]
+            for tok in after_tokens:
                 tok_clean = tok.rstrip("s")
-                target = None
+                target: str | None = None
                 if tok in _CLASSES:
                     target = tok
                 elif tok_clean in _CLASSES:
@@ -210,7 +273,8 @@ def _heuristic_parse(text: str) -> dict:
                 if target:
                     spatial_relation = {"type": rel_type, "target_class": target}
                     break
-            break
+            if spatial_relation:
+                break
 
     # --- detect count constraint ---
     count_constraint: dict | None = None
@@ -232,6 +296,29 @@ def _heuristic_parse(text: str) -> dict:
     # --- nothing parsed → no_match ---
     if not any([detected_class, detected_color, negated, spatial_relation, count_constraint]):
         return _no_match()
+
+    # ── Spatial color-swap (mirrors parser_gateway._normalise_parse_result) ──────
+    # "person next to red car" → primary=person, color=red, spatial.target=car
+    # The color BELONGS to the car, not the person. Swap primary → car with color,
+    # and make the spatial target → person.
+    _PERSON_CLASSES = {"person", "people", "man", "woman", "child", "pedestrian", "guard", "officer", "worker", "warden"}
+    _VEHICLE_CLASSES = {"car", "vehicle", "truck", "bus", "van", "motorcycle", "bicycle", "sedan", "suv", "minivan", "jeep", "pickup"}
+
+    if (
+        spatial_relation
+        and detected_color
+        and detected_class in _PERSON_CLASSES
+        and spatial_relation.get("target_class") in _VEHICLE_CLASSES
+    ):
+        # The color describes the vehicle, not the person
+        # Swap: primary=vehicle+color, spatial.target=person
+        vehicle_class = spatial_relation["target_class"]
+        spatial_relation = {
+            "type":         spatial_relation["type"],
+            "target_class": detected_class,  # now points back to person
+        }
+        detected_class = vehicle_class
+        # color stays on detected_class (now the vehicle)
 
     return {
         "status": "match",

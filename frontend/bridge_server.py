@@ -100,11 +100,27 @@ except Exception as _e:
 # VOCABULARY HELPERS (real if backend available, mock fallback)
 # ═══════════════════════════════════════════════════════════════════
 _QUERY_SYNTAX_WORDS: set[str] = {
+    # Articles, prepositions, conjunctions
     "in", "on", "at", "with", "without", "no", "not", "of", "to", "the", "a", "an",
-    "and", "or", "left", "right", "is", "are", "has", "have", "wearing", "less",
-    "top", "bottom", "near", "beside", "one", "two", "three", "four", "five", "six",
-    "seven", "eight", "nine", "ten", "couple", "few", "several", "more", "fewer",
-    "than", "least", "exactly", "person", "people", "man", "woman", "child", "car",
+    "and", "or", "is", "are", "has", "have", "wearing", "less",
+    # Numbers
+    "one", "two", "three", "four", "five", "six",
+    "seven", "eight", "nine", "ten", "couple", "few", "several",
+    "more", "fewer", "than", "least", "exactly",
+    # Proximity / spatial relation words (map to 'near' in parser)
+    "next", "near", "beside", "by", "close", "adjacent", "alongside",
+    "holding", "touching", "around",
+    # Directional / positional words
+    "left", "right", "top", "bottom", "above", "below", "behind", "front",
+    "between", "across", "from", "through", "over", "under",
+    # Person class words
+    "person", "people", "man", "woman", "child",
+    # Vehicle class words
+    "car", "vehicle", "truck", "bus", "van", "motorcycle", "bicycle",
+    "sedan", "suv", "minivan", "jeep",
+    # Common query verbs / intent words
+    "show", "find", "get", "where", "what", "who", "which", "give",
+    "me", "all", "any", "most", "some", "seen", "detected", "appeared",
 }
 
 if _backend_available:
